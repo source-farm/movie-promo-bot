@@ -1,0 +1,5 @@
+.directory
+*.db
+*.a
+bot
+config.json
