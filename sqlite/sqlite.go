@@ -13,16 +13,18 @@ import (
 	"unsafe"
 )
 
-var ErrGeneral = errors.New("SQLite error")
-var ErrNegativeColumnNum = errors.New("Column number is negative")
-var ErrNoData = errors.New("No data")
-var ErrColumnNum = errors.New("Column number exceeds columns count in a result set")
-var ErrColumnNotInteger = errors.New("Column type in database isn't of INTEGER type")
-var ErrColumnNotFloat = errors.New("Column type in database isn't of FLOAT type")
-var ErrColumnNotText = errors.New("Column type in database isn't of TEXT type")
-var ErrColumnNotBlob = errors.New("Column type in database isn't of BLOB type")
-var ErrColumnType = errors.New("Unknown column type")
-var ErrNullColumn = errors.New("Column is NULL")
+var (
+	ErrGeneral           = errors.New("SQLite error")
+	ErrNegativeColumnNum = errors.New("Column number is negative")
+	ErrNoData            = errors.New("No data")
+	ErrColumnNum         = errors.New("Column number exceeds columns count in the result set")
+	ErrColumnNotInteger  = errors.New("Column type isn't INTEGER")
+	ErrColumnNotFloat    = errors.New("Column type isn't FLOAT")
+	ErrColumnNotText     = errors.New("Column type isn't TEXT")
+	ErrColumnNotBlob     = errors.New("Column type isn't BLOB")
+	ErrColumnType        = errors.New("Unknown column type")
+	ErrNullColumn        = errors.New("Column is NULL")
+)
 
 // Conn представляет собой одно соединение с БД.
 type Conn struct {
