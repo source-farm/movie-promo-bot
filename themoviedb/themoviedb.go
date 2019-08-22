@@ -2,20 +2,32 @@
 package themoviedb
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 )
 
 var movieDailyExportMaxSize = 50 * 1024 * 1024 // 50MiB
 
+type configuration struct {
+	Images struct {
+		BaseURL     string   `json:"base_url"`
+		PosterSizes []string `json:"poster_sizes"`
+	} `json:"images"`
+}
+
 // Client позволяет выполнять запросы к TheMovieDB API.
 type Client struct {
 	key        string
 	httpClient *http.Client
+	apiBaseURL string
+	config     configuration
 }
 
 // NewClient возвращает новый TheMovieDB API клиент. Если httpClient равен
@@ -24,11 +36,42 @@ func NewClient(key string, httpClient *http.Client) *Client {
 	client := Client{
 		key:        key,
 		httpClient: httpClient,
+		apiBaseURL: "http://api.themoviedb.org/3",
 	}
 	if client.httpClient == nil {
 		client.httpClient = http.DefaultClient
 	}
 	return &client
+}
+
+func (c *Client) Configure() error {
+	url, err := url.Parse(c.apiBaseURL + "/configuration")
+	if err != nil {
+		return err
+	}
+	query := url.Query()
+	query.Add("api_key", c.key)
+	url.RawQuery = query.Encode()
+
+	resp, err := c.httpClient.Get(url.String())
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("themoviedb: " + resp.Status)
+	}
+
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return err
+	}
+	err = json.Unmarshal(body, &c.config)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // GetDailyExport позволяет скачать формируемый каждый день файл всех фильмов
