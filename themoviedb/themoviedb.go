@@ -44,6 +44,10 @@ func NewClient(key string, httpClient *http.Client) *Client {
 	return &client
 }
 
+// Configure получает настройки TheMovieDB API (GET /configuration). Удачный
+// вызов этого метода заполняет поле config клиента, который необходим при
+// выполнении запросов для получения изображений. В документации к
+// TheMovieDB API рекомендуют получать настройки раз в несколько дней.
 func (c *Client) Configure() error {
 	url, err := url.Parse(c.apiBaseURL + "/configuration")
 	if err != nil {
