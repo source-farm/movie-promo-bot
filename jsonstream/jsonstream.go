@@ -168,3 +168,8 @@ func (s *Scanner) Find(stream io.Reader) error {
 
 	return nil
 }
+
+// Reset сбрасывает сканер к начальному состоянию.
+func (s *Scanner) Reset() {
+	s.paths = map[string]interface{}{}
+}
