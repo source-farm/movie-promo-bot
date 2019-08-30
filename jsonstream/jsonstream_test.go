@@ -1,12 +1,15 @@
 package jsonstream
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
 
-func TestValueJSON(t *testing.T) {
+func TestSingleValueJSON(t *testing.T) {
 	// null
 	ptr := new(int)
 	scanner := NewScanner()
@@ -18,7 +21,7 @@ func TestValueJSON(t *testing.T) {
 
 	// bool
 	b := false
-	scanner = NewScanner()
+	scanner.Reset()
 	scanner.SearchFor(&b)
 	err = scanner.Find(strings.NewReader("true"))
 	if !b {
@@ -32,7 +35,7 @@ func TestValueJSON(t *testing.T) {
 
 	// float64
 	f := 0.0
-	scanner = NewScanner()
+	scanner.Reset()
 	scanner.SearchFor(&f)
 	err = scanner.Find(strings.NewReader("4.2"))
 	if f != 4.2 {
@@ -41,7 +44,7 @@ func TestValueJSON(t *testing.T) {
 
 	// Number
 	var number json.Number
-	scanner = NewScanner()
+	scanner.Reset()
 	scanner.SearchFor(&number)
 	err = scanner.Find(strings.NewReader("42"))
 	if err != nil {
@@ -54,10 +57,81 @@ func TestValueJSON(t *testing.T) {
 
 	// string
 	var s string
-	scanner = NewScanner()
+	scanner.Reset()
 	scanner.SearchFor(&s)
 	err = scanner.Find(strings.NewReader(`"foo"`))
 	if s != "foo" {
+		t.Fatal(err)
+	}
+}
+
+func TestValueExtract(t *testing.T) {
+	type Transport struct {
+		Private bool
+		Public  []string
+	}
+	type Town struct {
+		Name      string
+		Age       int
+		Transport Transport
+	}
+
+	var town = Town{
+		Name: "Marine",
+		Age:  221,
+		Transport: Transport{
+			Private: false,
+			Public:  []string{"bus", "metro", "taxi", "tramway"},
+		},
+	}
+	// town в виде JSON'а
+	//	{
+	//		"Name": "Marine",
+	//		"Age": 221
+	//		"Transport": {
+	//			"Private": false,
+	//			"Public": ["bus", "metro", "taxi", "tramway"]
+	//		}
+	//	}
+
+	testJSON, err := json.Marshal(town)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Извлечение всего JSON'а.
+	scanner := NewScanner()
+	var extractedTown Town
+	scanner.SearchFor(&extractedTown)
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if !reflect.DeepEqual(town, extractedTown) {
+		t.Fatal(err)
+	}
+
+	// Извлечение одного значения на первом уровне вложенности.
+	var name string
+	scanner.Reset()
+	scanner.SearchFor(&name, "Name")
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if name != "Marine" {
+		t.Fatal(name)
+	}
+
+	// Извлечение одного значения на втором уровне вложенности.
+	private := true
+	scanner.Reset()
+	scanner.SearchFor(&private, "Transport", "Private")
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if private {
+		fmt.Println(err)
+	}
+
+	// Извлечение массива на втором уровне вложенности.
+	public := []string{}
+	scanner.Reset()
+	scanner.SearchFor(&public, "Transport", "Public")
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if !reflect.DeepEqual(town.Transport.Public, public) {
 		t.Fatal(err)
 	}
 }
