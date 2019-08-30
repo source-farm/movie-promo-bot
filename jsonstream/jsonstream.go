@@ -39,15 +39,20 @@ func (j *jsonPath) pop() {
 	}
 }
 
+type pathValue struct {
+	ptr   interface{}
+	found bool
+}
+
 // Scanner сканирует входной JSON поток в поиске указанных значений.
 type Scanner struct {
-	paths map[string]interface{}
+	paths map[string]pathValue
 }
 
 // NewScanner создаёт новый сканер JSON потока.
 func NewScanner() *Scanner {
 	scanner := Scanner{
-		paths: map[string]interface{}{},
+		paths: map[string]pathValue{},
 	}
 	return &scanner
 }
@@ -91,7 +96,7 @@ func (s *Scanner) SearchFor(v interface{}, path ...string) error {
 	}
 
 	vPath := strings.Join(path, keyDelim)
-	s.paths[vPath] = v
+	s.paths[vPath] = pathValue{ptr: v, found: false}
 
 	return nil
 }
@@ -102,8 +107,8 @@ func (s *Scanner) Find(stream io.Reader) error {
 	dec := json.NewDecoder(stream)
 	// Пустая строка в paths означает, что нужно декодировать весь JSON.
 	// В этом случае сканер превращается в json.Unmarshaler.
-	if v, ok := s.paths[""]; ok {
-		return dec.Decode(v)
+	if value, ok := s.paths[""]; ok {
+		return dec.Decode(value.ptr)
 	}
 
 	stack := []jsonElement{}
@@ -145,11 +150,12 @@ func (s *Scanner) Find(stream io.Reader) error {
 					key, ok := token.(string)
 					if ok {
 						path.push(key)
-						if v, ok := s.paths[string(path)]; ok {
-							err := dec.Decode(v)
+						if value, ok := s.paths[string(path)]; ok && !value.found {
+							err := dec.Decode(value.ptr)
 							if err != nil {
 								return err
 							}
+							value.found = true
 							// Завершили работу с значением ключа.
 							stack = stack[:len(stack)-1]
 							path.pop()
@@ -166,10 +172,16 @@ func (s *Scanner) Find(stream io.Reader) error {
 		}
 	}
 
+	for _, value := range s.paths {
+		if !value.found {
+			return errors.New("jsonstream: not all values found")
+		}
+	}
+
 	return nil
 }
 
 // Reset сбрасывает сканер к начальному состоянию.
 func (s *Scanner) Reset() {
-	s.paths = map[string]interface{}{}
+	s.paths = map[string]pathValue{}
 }

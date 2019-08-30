@@ -3,7 +3,6 @@ package jsonstream
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -65,7 +64,7 @@ func TestSingleValueJSON(t *testing.T) {
 	}
 }
 
-func TestValueExtract(t *testing.T) {
+func TestSingleValueExtract(t *testing.T) {
 	type Transport struct {
 		Private bool
 		Public  []string
@@ -123,7 +122,7 @@ func TestValueExtract(t *testing.T) {
 	scanner.SearchFor(&private, "Transport", "Private")
 	err = scanner.Find(bytes.NewReader(testJSON))
 	if private {
-		fmt.Println(err)
+		t.Fatal(err)
 	}
 
 	// Извлечение массива на втором уровне вложенности.
@@ -132,6 +131,57 @@ func TestValueExtract(t *testing.T) {
 	scanner.SearchFor(&public, "Transport", "Public")
 	err = scanner.Find(bytes.NewReader(testJSON))
 	if !reflect.DeepEqual(town.Transport.Public, public) {
+		t.Fatal(err)
+	}
+}
+
+func TestMultipleValuesExtract(t *testing.T) {
+	type Size struct {
+		Width  int
+		Height int
+	}
+	type Painting struct {
+		Name   string
+		Artist string
+		Year   int
+		Size   Size
+	}
+
+	painting := Painting{
+		Name:   "Basket of Fruit",
+		Artist: "Caravaggio",
+		Year:   1599,
+		Size: Size{
+			Width:  64,
+			Height: 46,
+		},
+	}
+	// painting в виде JSON'а
+	//	{
+	//		"Name": "Basket of Fruit",
+	//		"Artist": "Caravaggio",
+	//		"Year": 1599,
+	//		"Size": {
+	//			"Width": 64,
+	//			"Height": 46
+	//		}
+	//	}
+
+	testJSON, err := json.Marshal(painting)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var artist string
+	var width int
+	scanner := NewScanner()
+	scanner.SearchFor(&artist, "Artist")
+	scanner.SearchFor(&width, "Size", "Width")
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artist != painting.Artist || width != painting.Size.Width {
 		t.Fatal(err)
 	}
 }
