@@ -3,6 +3,7 @@ package jsonstream
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -141,16 +142,18 @@ func TestMultipleValuesExtract(t *testing.T) {
 		Height int
 	}
 	type Painting struct {
-		Name   string
-		Artist string
-		Year   int
-		Size   Size
+		Name     string
+		Artist   string
+		Year     int
+		Location string
+		Size     Size
 	}
 
 	painting := Painting{
-		Name:   "Basket of Fruit",
-		Artist: "Caravaggio",
-		Year:   1599,
+		Name:     "Basket of Fruit",
+		Artist:   "Caravaggio",
+		Year:     1599,
+		Location: "Biblioteca Ambrosiana",
 		Size: Size{
 			Width:  64,
 			Height: 46,
@@ -161,6 +164,7 @@ func TestMultipleValuesExtract(t *testing.T) {
 	//		"Name": "Basket of Fruit",
 	//		"Artist": "Caravaggio",
 	//		"Year": 1599,
+	//		"Location": "Biblioteca Ambrosiana",
 	//		"Size": {
 	//			"Width": 64,
 	//			"Height": 46
@@ -179,9 +183,18 @@ func TestMultipleValuesExtract(t *testing.T) {
 	scanner.SearchFor(&width, "Size", "Width")
 	err = scanner.Find(bytes.NewReader(testJSON))
 	if err != nil {
+		fmt.Println(artist, width)
 		t.Fatal(err)
 	}
 	if artist != painting.Artist || width != painting.Size.Width {
 		t.Fatal(err)
+	}
+
+	scanner.Reset()
+	var depth int
+	scanner.SearchFor(&depth, "Size", "Depth")
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if err == nil {
+		t.Fatal("want error but got nil")
 	}
 }

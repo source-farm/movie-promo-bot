@@ -156,6 +156,7 @@ func (s *Scanner) Find(stream io.Reader) error {
 								return err
 							}
 							value.found = true
+							s.paths[string(path)] = value
 							// Завершили работу с значением ключа.
 							stack = stack[:len(stack)-1]
 							path.pop()
