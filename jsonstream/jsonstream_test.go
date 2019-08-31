@@ -84,7 +84,7 @@ func TestSingleValueExtract(t *testing.T) {
 			Public:  []string{"bus", "metro", "taxi", "tramway"},
 		},
 	}
-	// town в виде JSON'а
+	// town в виде JSON'а:
 	//	{
 	//		"Name": "Marine",
 	//		"Age": 221
@@ -159,7 +159,7 @@ func TestMultipleValuesExtract(t *testing.T) {
 			Height: 46,
 		},
 	}
-	// painting в виде JSON'а
+	// painting в виде JSON'а:
 	//	{
 	//		"Name": "Basket of Fruit",
 	//		"Artist": "Caravaggio",
@@ -196,5 +196,127 @@ func TestMultipleValuesExtract(t *testing.T) {
 	err = scanner.Find(bytes.NewReader(testJSON))
 	if err == nil {
 		t.Fatal("want error but got nil")
+	}
+}
+
+func TestOverlappingPaths(t *testing.T) {
+	type Map struct {
+		Secret           string
+		TreasureLocation string
+	}
+	type Captain struct {
+		Nickname    string
+		FavoritePet string
+		Map         Map
+	}
+	type Ship struct {
+		Name    string
+		Pirate  bool
+		Captain Captain
+	}
+
+	ship := Ship{
+		Name:   "Wind master",
+		Pirate: true,
+		Captain: Captain{
+			Nickname:    "Woodleg",
+			FavoritePet: "Parrot",
+			Map: Map{
+				Secret:           "Sink map in water",
+				TreasureLocation: "Gull island, Redbeard's shack",
+			},
+		},
+	}
+	// ship в виде JSON'а:
+	//	{
+	//		"Name": "Wind master",
+	//		"Pirate": true,
+	//		"Captain": {
+	//			"Nickname": "Woodleg",
+	//			"FavoritePet": "Parrot",
+	//			"Map": {
+	//				"Secret": "Sink in water",
+	//				"TreasureLocation": "Gull island, Redbeard's shack"
+	//			}
+	//		}
+	//	}
+
+	testJSON, err := json.Marshal(ship)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Проверка невозможности добавления продолжения уже существующего пути.
+	decodedShip := Ship{}
+	var shipName string
+	scanner := NewScanner()
+	err = scanner.SearchFor(&decodedShip)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.SearchFor(&shipName, "Name")
+	if err == nil {
+		t.Fatal("want error but got nil")
+	}
+
+	// Проверка невозможности добавления продолжения уже существующего пути.
+	var captain Captain
+	var nickname string
+	scanner.Reset()
+	err = scanner.SearchFor(&captain, "Captain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.SearchFor(&nickname, "Captain", "Nickname")
+	if err == nil {
+		t.Fatal("want error but got nil")
+	}
+
+	// Проверка вытеснения более общим путём продолжений этого общего пути.
+	captain = Captain{}
+	nickname = ""
+	var favoritePet string
+	scanner.Reset()
+	err = scanner.SearchFor(&nickname, "Captain", "Nickname")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.SearchFor(&favoritePet, "Captain", "FavoritePet")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.SearchFor(&captain, "Captain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if nickname != "" || favoritePet != "" {
+		t.Fatal("decoded unexpected values")
+	}
+	if !reflect.DeepEqual(captain, ship.Captain) {
+		t.Fatal("decode error")
+	}
+
+	// Проверка двойного добавления одного и того же пути.
+	map1 := Map{}
+	map2 := Map{}
+	scanner.Reset()
+	err = scanner.SearchFor(&map1, "Captain", "Map")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.SearchFor(&map2, "Captain", "Map")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(map1, Map{}) || !reflect.DeepEqual(map2, ship.Captain.Map) {
+		t.Fatal("add path twice error")
 	}
 }

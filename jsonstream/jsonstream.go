@@ -58,11 +58,10 @@ func NewScanner() *Scanner {
 }
 
 // SearchFor задаёт путь path из JSON ключей, значение в конце которой
-// записывается в v. v должен быть указателем. Если path равен nil, то в v
-// записывается значение прямо в корне JSON'а. Если path не равен nil, то он не
-// должен содержать пустых строк, т.е. ключей. Путь в path определяется
-// последовательным перечислением ключей, где каждый следующий переходит на один
-// уровень вглубь.
+// декодируется в v. v должен быть указателем. Если path равен nil, то в v
+// декодируется весь JSON поток. Если path не равен nil, то он не должен содержать
+// пустых строк, т.е. ключей. Путь в path определяется последовательным
+// перечислением ключей, где каждый следующий переходит на один уровень вглубь.
 //
 // Пример:
 //
@@ -81,22 +80,50 @@ func NewScanner() *Scanner {
 //	scanner.Find(strings.NewReader(city))
 //	fmt.Println(latitude)
 //
+// Нельзя добавлять путь, который является продолжением уже ранее добавленного
+// пути.
+//
+// При добавлении более общего пути ранее добавленные продолжения этого пути
+// удаляются из сканера.
+//
 func (s *Scanner) SearchFor(v interface{}, path ...string) error {
-	// TODO: исключить добавление вложенных путей.
-
 	vType := reflect.TypeOf(v)
 	if vType == nil || vType.Kind() != reflect.Ptr {
 		return errors.New("jsonstream: v isn't a pointer")
 	}
 
-	for i := range path {
-		if path[i] == "" {
-			return errors.New("jsonstream: path contains empty key")
+	if path == nil {
+		s.paths[""] = pathValue{ptr: v, found: false}
+	} else {
+		for i := range path {
+			if path[i] == "" {
+				return errors.New("jsonstream: path contains empty key")
+			}
 		}
-	}
 
-	vPath := strings.Join(path, keyDelim)
-	s.paths[vPath] = pathValue{ptr: v, found: false}
+		vPath := strings.Join(path, keyDelim)
+
+		for p := range s.paths {
+			// Исключаем добавление пути, если этот путь является продолжением
+			// другого ранее добавленного пути.
+			if strings.HasPrefix(vPath, p) && vPath != p {
+				pathExpanded := strings.Join(path, " -> ")
+				pExpanded := strings.ReplaceAll(p, keyDelim, " -> ")
+				if pExpanded == "" {
+					pExpanded = "<empty path>"
+				}
+				return errors.New("jsonstream: path (" + pathExpanded + ") is a continuation of the path (" + pExpanded + ")")
+			}
+
+			// Удаляем из ранее добавленных путей все пути, которые являются
+			// продолжением path.
+			if strings.HasPrefix(p, vPath) {
+				delete(s.paths, p)
+			}
+		}
+
+		s.paths[vPath] = pathValue{ptr: v, found: false}
+	}
 
 	return nil
 }
