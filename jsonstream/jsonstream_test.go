@@ -3,7 +3,6 @@ package jsonstream
 import (
 	"bytes"
 	"encoding/json"
-	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -183,7 +182,6 @@ func TestMultipleValuesExtract(t *testing.T) {
 	scanner.SearchFor(&width, "Size", "Width")
 	err = scanner.Find(bytes.NewReader(testJSON))
 	if err != nil {
-		fmt.Println(artist, width)
 		t.Fatal(err)
 	}
 	if artist != painting.Artist || width != painting.Size.Width {
@@ -318,5 +316,122 @@ func TestOverlappingPaths(t *testing.T) {
 	}
 	if !reflect.DeepEqual(map1, Map{}) || !reflect.DeepEqual(map2, ship.Captain.Map) {
 		t.Fatal("add path twice error")
+	}
+}
+
+func TestFilter(t *testing.T) {
+	// Проверка пустого фильтра.
+	nums := []int{1, 2, 3}
+	testJSON, err := json.Marshal(nums)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scanner := NewScanner()
+	var decodedNums []int
+	scanner.SearchFor(&decodedNums)
+	filter := func(v interface{}) bool {
+		return true
+	}
+	err = scanner.SetFilter(filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(decodedNums, nums) {
+		t.Fatal("decode error")
+	}
+
+	/*
+		// Проверка фильтрации массива строк на первом уровне вложенности.
+		type Dict struct {
+			Author string
+			Words  []string
+		}
+		dict := Dict{
+			Author: "Mr. Claydon",
+			Words:  []string{"fly", "home", "freeze", "ace", "zero"},
+		}
+		testJSON, err = json.Marshal(dict)
+		if err != nil {
+			t.Fatal(err)
+		}
+		filter = func(v interface{}) bool {
+			word, ok := v.(string)
+			if !ok {
+				return false
+			}
+			return len(word) <= 4
+		}
+		var wordsFiltered []string
+		for _, word := range dict.Words {
+			if filter(word) {
+				wordsFiltered = append(wordsFiltered, word)
+			}
+		}
+		scanner.Reset()
+		var wordsDecoded []string
+		scanner.SearchFor(&wordsDecoded, "Words")
+		err = scanner.SetFilter(filter, "Words")
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = scanner.Find(bytes.NewReader(testJSON))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !reflect.DeepEqual(wordsFiltered, wordsDecoded) {
+			t.Fatal("decode error")
+		}
+	*/
+
+	// Проверка фильтрации массива объектов на первом уровне вложенности.
+	type HourTemp struct {
+		Hour int
+		Temp float64
+	}
+	dayTemp := []HourTemp{
+		{0, 12.1},
+		{1, 15.2},
+		{2, 10.8},
+		{3, 17.8},
+		{4, 18.0},
+		{5, 18.3},
+		{6, 18.4},
+		{7, 18.7},
+		{8, 20.3},
+	}
+	testJSON, err = json.Marshal(dayTemp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter = func(v interface{}) bool {
+		hourTemp, ok := v.(HourTemp)
+		if !ok {
+			return false
+		}
+		return hourTemp.Temp > 17.0
+	}
+	var dayTempFiltered []HourTemp
+	for _, hourTemp := range dayTemp {
+		if filter(hourTemp) {
+			dayTempFiltered = append(dayTempFiltered, hourTemp)
+		}
+	}
+	scanner.Reset()
+	var dayTempDecoded []HourTemp
+	scanner.SearchFor(&dayTempDecoded)
+	err = scanner.SetFilter(filter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(dayTempFiltered, dayTempDecoded) {
+		t.Fatal("decode error")
 	}
 }

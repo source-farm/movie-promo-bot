@@ -39,9 +39,12 @@ func (j *jsonPath) pop() {
 	}
 }
 
+type Filter = func(v interface{}) bool
+
 type pathValue struct {
-	ptr   interface{}
-	found bool
+	ptr    interface{}
+	found  bool
+	filter Filter
 }
 
 // Scanner сканирует входной JSON поток в поиске указанных значений.
@@ -128,19 +131,41 @@ func (s *Scanner) SearchFor(v interface{}, path ...string) error {
 	return nil
 }
 
+// SetFilter позволяет фильтровать значения JSON массивов. Путь path уже должен
+// существовать в сканере и при этом установленное для него через метод
+// SearchFor значение должно быть указателем на слайс.
+func (s *Scanner) SetFilter(filter Filter, path ...string) error {
+	valuePath := strings.Join(path, keyDelim)
+	value, ok := s.paths[valuePath]
+	if !ok {
+		return errors.New("jsonstream: path not found")
+	}
+	if reflect.TypeOf(value.ptr).Elem().Kind() != reflect.Slice {
+		return errors.New("jsonstream: path isn't slice")
+	}
+	value.filter = filter
+	s.paths[valuePath] = value
+	return nil
+}
+
 // Find запускает сканирование JSON потока. Если все указанные через SearchFor
 // значения найдены, то возвращается nil. Иначе возвращается ошибка.
 func (s *Scanner) Find(stream io.Reader) error {
 	dec := json.NewDecoder(stream)
-	// Пустая строка в paths означает, что нужно декодировать весь JSON.
-	// В этом случае сканер превращается в json.Unmarshaler.
-	if value, ok := s.paths[""]; ok {
+	// Пустая строка в paths означает, что нужно декодировать весь JSON. Так и
+	// поступаем, только если JSON не декодируется в слайс. Этот случай
+	// рассматривается отдельно в основном цикле ниже, т.к. для массивов может
+	// быть установлена фильтрация.
+	value, ok := s.paths[""]
+	if ok && reflect.TypeOf(value.ptr).Elem().Kind() != reflect.Slice {
 		return dec.Decode(value.ptr)
 	}
 
 	stack := []jsonElement{}
 	var path jsonPath
 	for {
+		// TODO: остановить декодирование, если все пути найдены.
+
 		token, err := dec.Token()
 		if err == io.EOF {
 			break
@@ -156,6 +181,45 @@ func (s *Scanner) Find(stream io.Reader) error {
 				stack = append(stack, jsonObject)
 			case '[':
 				stack = append(stack, jsonArray)
+				value, ok := s.paths[string(path)]
+				if ok && !value.found {
+					// reflect.TypeOf(value.ptr) - это указатель (*T), т.к. SearchFor позволяет добавлять
+					// только указатели для путей.
+					// reflect.TypeOf(value.ptr).Elem() - это T.
+					valueType := reflect.TypeOf(value.ptr).Elem()
+					if valueType.Kind() == reflect.Slice {
+						// В следующих двух строках создаётся значение такого же типа, как и элементы
+						// слайса, в который нужно добавлять декодированные значения и его адрес
+						// записывается в decodedValuePtr.
+						sliceElementType := valueType.Elem()
+						decodedValuePtr := reflect.New(sliceElementType)
+						for dec.More() { // Пока в массиве есть элементы.
+							// decodedValuePtr.Interface() позволяет перейти из области reflect'а обратно в Go.
+							err := dec.Decode(decodedValuePtr.Interface())
+							if err != nil {
+								return err
+							}
+							if value.filter == nil || value.filter(decodedValuePtr.Elem().Interface()) {
+								sliceValuePtr := reflect.ValueOf(value.ptr)
+								// sliceValuePtr.CanSet() возвращает false.
+								// sliceValuePtr.Elem() возвращает reflect.Value, который позволяет менять значение,
+								// на которое указывает value.ptr. Более подробно можно прочитать по ссылке
+								//
+								// https://blog.golang.org/laws-of-reflection
+								//
+								// в третьем законе - "To modify a reflection object, the value must be settable".
+								//
+								sliceValue := sliceValuePtr.Elem()
+								// decodedValuePtr - это *T, decodedValuePtr.Elem() - это T.
+								sliceValue.Set(reflect.Append(sliceValue, decodedValuePtr.Elem()))
+							}
+						}
+					} else {
+						return errors.New("jsonstream: cannot decode array to non slice value")
+					}
+					value.found = true
+					s.paths[string(path)] = value
+				}
 			case '}', ']':
 				if len(stack) > 0 {
 					stack = stack[:len(stack)-1]
@@ -177,13 +241,16 @@ func (s *Scanner) Find(stream io.Reader) error {
 					key, ok := token.(string)
 					if ok {
 						path.push(key)
-						if value, ok := s.paths[string(path)]; ok && !value.found {
+						value, ok := s.paths[string(path)]
+						// Здесь декодируются все JSON значения, кроме массивов. Массивы обрабатываются выше.
+						if ok && !value.found && reflect.TypeOf(value.ptr).Elem().Kind() != reflect.Slice {
 							err := dec.Decode(value.ptr)
 							if err != nil {
 								return err
 							}
 							value.found = true
 							s.paths[string(path)] = value
+
 							// Завершили работу с значением ключа.
 							stack = stack[:len(stack)-1]
 							path.pop()
