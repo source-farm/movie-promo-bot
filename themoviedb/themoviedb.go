@@ -2,6 +2,7 @@
 package themoviedb
 
 import (
+	"bot/jsonstream"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"time"
 )
 
 var movieDailyExportMaxSize = 50 * 1024 * 1024 // 50MiB
@@ -28,6 +30,32 @@ type Client struct {
 	httpClient *http.Client
 	apiBaseURL string
 	config     configuration
+}
+
+// Title хранит название фильма.
+type Title struct {
+	CountryISO31661 string `json:"iso_3166_1"`
+	Title           string `json:"title"`
+}
+
+// Poster хранит информацию о постере фильма.
+type Poster struct {
+	LangISO6391 string `json:"iso_639_1"`
+	Path        string `json:"file_path"`
+	Width       int    `json:"width"`
+	Height      int    `json:"height"`
+}
+
+// Movie представляет собой информацию об одном фильме.
+type Movie struct {
+	TMDBID              int
+	IMDBID              string
+	Adult               bool
+	ReleaseDate         time.Time
+	Popularity          float64
+	OriginalLangISO6391 string
+	Titles              []Title
+	Posters             []Poster
 }
 
 // NewClient возвращает новый TheMovieDB API клиент. Если httpClient равен
@@ -124,4 +152,69 @@ func (c *Client) GetDailyExport(year, month, day int, filename string) (err erro
 	}
 
 	return nil
+}
+
+// GetMovie возвращает информацию о фильме с идентификатором id.
+func (c *Client) GetMovie(id int) (Movie, error) {
+	// Формируем URL вида
+	//
+	// http://api.themoviedb.org/3/movie/<id>?api_key=<key>&append_to_response=alternative_titles,images
+	//
+	url, err := url.Parse(c.apiBaseURL + "/movie/" + strconv.Itoa(id))
+	if err != nil {
+		return Movie{}, err
+	}
+	query := url.Query()
+	query.Add("api_key", c.key)
+	query.Add("append_to_response", "alternative_titles,images")
+	url.RawQuery = query.Encode()
+
+	resp, err := c.httpClient.Get(url.String())
+	if err != nil {
+		return Movie{}, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return Movie{}, errors.New("themoviedb: " + resp.Status)
+	}
+
+	movie := Movie{}
+	scanner := jsonstream.NewScanner()
+	scanner.SearchFor(&movie.TMDBID, "id")
+	scanner.SearchFor(&movie.IMDBID, "imdb_id")
+	scanner.SearchFor(&movie.Adult, "adult")
+	var releaseDateStr string
+	scanner.SearchFor(&releaseDateStr, "release_date")
+	scanner.SearchFor(&movie.Popularity, "popularity")
+	scanner.SearchFor(&movie.OriginalLangISO6391, "original_language")
+	scanner.SearchFor(&movie.Titles, "alternative_titles", "titles")
+	titleFilter := func(v interface{}) bool {
+		title, ok := v.(Title)
+		if !ok {
+			return false
+		}
+		return title.CountryISO31661 == "US" || title.CountryISO31661 == "RU"
+	}
+	scanner.SetFilter(titleFilter, "alternative_titles", "titles")
+	scanner.SearchFor(&movie.Posters, "images", "posters")
+	posterFilter := func(v interface{}) bool {
+		poster, ok := v.(Poster)
+		if !ok {
+			return false
+		}
+		return poster.LangISO6391 == "en" || poster.LangISO6391 == "ru"
+	}
+	scanner.SetFilter(posterFilter, "images", "posters")
+	err = scanner.Find(resp.Body)
+	if err != nil {
+		return Movie{}, err
+	}
+
+	dateFormatISO := "2006-01-02"
+	releaseDate, err := time.Parse(dateFormatISO, releaseDateStr)
+	if err == nil {
+		movie.ReleaseDate = releaseDate
+	}
+
+	return movie, nil
 }
