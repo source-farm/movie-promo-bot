@@ -2,6 +2,8 @@
 package themoviedb
 
 import (
+	"bot/iso31661"
+	"bot/iso6391"
 	"bot/jsonstream"
 	"encoding/json"
 	"errors"
@@ -24,6 +26,18 @@ type configuration struct {
 	} `json:"images"`
 }
 
+// Языки, которые поддерживаются Client'ом.
+var supportedLangs = map[iso6391.LangCode]struct{}{
+	iso6391.En: struct{}{},
+	iso6391.Ru: struct{}{},
+}
+
+// Страны, которые поддерживаются Client'ом.
+var supportedCountries = map[iso31661.CountryCode]struct{}{
+	iso31661.US: struct{}{},
+	iso31661.Ru: struct{}{},
+}
+
 // Client позволяет выполнять запросы к TheMovieDB API.
 type Client struct {
 	key        string
@@ -34,28 +48,28 @@ type Client struct {
 
 // Title хранит название фильма.
 type Title struct {
-	CountryISO31661 string `json:"iso_3166_1"`
-	Title           string `json:"title"`
+	Country iso31661.CountryCode `json:"iso_3166_1"`
+	Title   string               `json:"title"`
 }
 
 // Poster хранит информацию о постере фильма.
 type Poster struct {
-	LangISO6391 string `json:"iso_639_1"`
-	Path        string `json:"file_path"`
-	Width       int    `json:"width"`
-	Height      int    `json:"height"`
+	Lang        iso6391.LangCode `json:"iso_639_1"`
+	Path        string           `json:"file_path"`
+	VoteAverage float64          `json:"vote_average"`
 }
 
 // Movie представляет собой информацию об одном фильме.
 type Movie struct {
-	TMDBID              int
-	IMDBID              string
-	Adult               bool
-	ReleaseDate         time.Time
-	Popularity          float64
-	OriginalLangISO6391 string
-	Titles              []Title
-	Posters             []Poster
+	TMDBID        int
+	IMDBID        string
+	OriginalTitle string
+	OriginalLang  iso6391.LangCode
+	Adult         bool
+	ReleaseDate   time.Time
+	Popularity    float64
+	Title         map[iso31661.CountryCode]Title
+	Poster        map[iso6391.LangCode]Poster
 }
 
 // NewClient возвращает новый TheMovieDB API клиент. Если httpClient равен
@@ -179,30 +193,38 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	}
 
 	movie := Movie{}
+	//- Настройка сканирования ответного JSON'а.
 	scanner := jsonstream.NewScanner()
 	scanner.SearchFor(&movie.TMDBID, "id")
 	scanner.SearchFor(&movie.IMDBID, "imdb_id")
+	scanner.SearchFor(&movie.OriginalTitle, "original_title")
+	scanner.SearchFor(&movie.OriginalLang, "original_language")
 	scanner.SearchFor(&movie.Adult, "adult")
 	var releaseDateStr string
 	scanner.SearchFor(&releaseDateStr, "release_date")
 	scanner.SearchFor(&movie.Popularity, "popularity")
-	scanner.SearchFor(&movie.OriginalLangISO6391, "original_language")
-	scanner.SearchFor(&movie.Titles, "alternative_titles", "titles")
+	//- Названия фильма на различных языках.
+	var titles []Title
+	scanner.SearchFor(&titles, "alternative_titles", "titles")
 	titleFilter := func(v interface{}) bool {
 		title, ok := v.(Title)
 		if !ok {
 			return false
 		}
-		return title.CountryISO31661 == "US" || title.CountryISO31661 == "RU"
+		_, ok = supportedCountries[title.Country]
+		return ok
 	}
 	scanner.SetFilter(titleFilter, "alternative_titles", "titles")
-	scanner.SearchFor(&movie.Posters, "images", "posters")
+	//- Постеры.
+	var posters []Poster
+	scanner.SearchFor(&posters, "images", "posters")
 	posterFilter := func(v interface{}) bool {
 		poster, ok := v.(Poster)
 		if !ok {
 			return false
 		}
-		return poster.LangISO6391 == "en" || poster.LangISO6391 == "ru"
+		_, ok = supportedLangs[poster.Lang]
+		return ok
 	}
 	scanner.SetFilter(posterFilter, "images", "posters")
 	err = scanner.Find(resp.Body)
@@ -214,6 +236,35 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	releaseDate, err := time.Parse(dateFormatISO, releaseDateStr)
 	if err == nil {
 		movie.ReleaseDate = releaseDate
+	}
+
+	if len(titles) > 0 {
+		movie.Title = map[iso31661.CountryCode]Title{}
+	}
+	for i := range titles {
+		switch titles[i].Country {
+		case iso31661.US:
+			movie.Title[iso31661.US] = titles[i]
+		case iso31661.Ru:
+			movie.Title[iso31661.Ru] = titles[i]
+		}
+	}
+
+	// Отбираем самый популярный постер для каждого языка.
+	if len(posters) > 0 {
+		movie.Poster = map[iso6391.LangCode]Poster{}
+	}
+	for i := range posters {
+		lang := posters[i].Lang
+		_, ok := supportedLangs[lang]
+		if !ok {
+			continue
+		}
+
+		p, ok := movie.Poster[lang]
+		if !ok || p.VoteAverage < posters[i].VoteAverage {
+			movie.Poster[lang] = posters[i]
+		}
 	}
 
 	return movie, nil
