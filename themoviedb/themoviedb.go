@@ -24,6 +24,7 @@ type configuration struct {
 		BaseURL     string   `json:"base_url"`
 		PosterSizes []string `json:"poster_sizes"`
 	} `json:"images"`
+	posterSize string
 }
 
 // Языки, которые поддерживаются Client'ом.
@@ -40,10 +41,11 @@ var supportedCountries = map[iso31661.CountryCode]struct{}{
 
 // Client позволяет выполнять запросы к TheMovieDB API.
 type Client struct {
-	key        string
-	httpClient *http.Client
-	apiBaseURL string
-	config     configuration
+	key            string
+	httpClient     *http.Client
+	apiBaseURL     string
+	config         configuration
+	lastConfigured time.Time
 }
 
 // Title хранит название фильма.
@@ -115,6 +117,26 @@ func (c *Client) Configure() error {
 	err = json.Unmarshal(body, &c.config)
 	if err != nil {
 		return err
+	}
+
+	// Сразу же подбираем нужный размер постера.
+	w500Found := false
+	w780Found := false
+	for _, size := range c.config.Images.PosterSizes {
+		switch size {
+		case "w500":
+			w500Found = true
+		case "w780":
+			w780Found = true
+		}
+	}
+	switch {
+	case w500Found:
+		c.config.posterSize = "w500"
+	case w780Found:
+		c.config.posterSize = "w780"
+	default:
+		c.config.posterSize = "original"
 	}
 
 	return nil
@@ -268,4 +290,39 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	}
 
 	return movie, nil
+}
+
+// GetPoster закачивает постер через путь к нему.
+func (c *Client) GetPoster(path string) ([]byte, error) {
+	if time.Since(c.lastConfigured) > time.Second*3600*24 {
+		err := c.Configure()
+		if err != nil {
+			return nil, err
+		}
+		c.lastConfigured = time.Now()
+	}
+
+	// Формируем URL вида
+	//
+	// http://image.tmdb.org/t/p/<size>/<poster>
+	//
+	url, err := url.Parse(c.config.Images.BaseURL + "/" + c.config.posterSize + path)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Get(url.String())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("themoviedb: " + resp.Status)
+	}
+	poster, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	return poster, nil
 }
