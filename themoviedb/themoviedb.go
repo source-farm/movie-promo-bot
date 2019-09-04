@@ -2,7 +2,6 @@
 package themoviedb
 
 import (
-	"bot/iso31661"
 	"bot/iso6391"
 	"bot/jsonstream"
 	"encoding/json"
@@ -33,10 +32,11 @@ var supportedLangs = map[iso6391.LangCode]struct{}{
 	iso6391.Ru: struct{}{},
 }
 
-// Страны, которые поддерживаются Client'ом.
-var supportedCountries = map[iso31661.CountryCode]struct{}{
-	iso31661.US: struct{}{},
-	iso31661.Ru: struct{}{},
+type translation struct {
+	Lang iso6391.LangCode `json:"iso_639_1"`
+	Data struct {
+		Title string `json:"title"`
+	} `json:"data"`
 }
 
 // Client позволяет выполнять запросы к TheMovieDB API.
@@ -50,8 +50,8 @@ type Client struct {
 
 // Title хранит название фильма.
 type Title struct {
-	Country iso31661.CountryCode `json:"iso_3166_1"`
-	Title   string               `json:"title"`
+	Lang  iso6391.LangCode `json:"iso_639_1"`
+	Title string           `json:"title"`
 }
 
 // Poster хранит информацию о постере фильма.
@@ -70,7 +70,7 @@ type Movie struct {
 	Adult         bool
 	ReleaseDate   time.Time
 	Popularity    float64
-	Title         map[iso31661.CountryCode]Title
+	Title         map[iso6391.LangCode]Title
 	Poster        map[iso6391.LangCode]Poster
 }
 
@@ -194,7 +194,7 @@ func (c *Client) GetDailyExport(year, month, day int, filename string) (err erro
 func (c *Client) GetMovie(id int) (Movie, error) {
 	// Формируем URL вида
 	//
-	// http://api.themoviedb.org/3/movie/<id>?api_key=<key>&append_to_response=alternative_titles,images
+	// http://api.themoviedb.org/3/movie/<id>?api_key=<key>&append_to_response=translations,images
 	//
 	url, err := url.Parse(c.apiBaseURL + "/movie/" + strconv.Itoa(id))
 	if err != nil {
@@ -202,7 +202,7 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	}
 	query := url.Query()
 	query.Add("api_key", c.key)
-	query.Add("append_to_response", "alternative_titles,images")
+	query.Add("append_to_response", "translations,images")
 	url.RawQuery = query.Encode()
 
 	resp, err := c.httpClient.Get(url.String())
@@ -226,17 +226,17 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	scanner.SearchFor(&releaseDateStr, "release_date")
 	scanner.SearchFor(&movie.Popularity, "popularity")
 	//- Названия фильма на различных языках.
-	var titles []Title
-	scanner.SearchFor(&titles, "alternative_titles", "titles")
-	titleFilter := func(v interface{}) bool {
-		title, ok := v.(Title)
+	var translations []translation
+	scanner.SearchFor(&translations, "translations", "translations")
+	translationFilter := func(v interface{}) bool {
+		t, ok := v.(translation)
 		if !ok {
 			return false
 		}
-		_, ok = supportedCountries[title.Country]
+		_, ok = supportedLangs[t.Lang]
 		return ok
 	}
-	scanner.SetFilter(titleFilter, "alternative_titles", "titles")
+	scanner.SetFilter(translationFilter, "translations", "translations")
 	//- Постеры.
 	var posters []Poster
 	scanner.SearchFor(&posters, "images", "posters")
@@ -260,15 +260,21 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 		movie.ReleaseDate = releaseDate
 	}
 
-	if len(titles) > 0 {
-		movie.Title = map[iso31661.CountryCode]Title{}
+	_, ok := supportedLangs[movie.OriginalLang]
+	if len(translations) > 0 || ok {
+		movie.Title = map[iso6391.LangCode]Title{}
 	}
-	for i := range titles {
-		switch titles[i].Country {
-		case iso31661.US:
-			movie.Title[iso31661.US] = titles[i]
-		case iso31661.Ru:
-			movie.Title[iso31661.Ru] = titles[i]
+	if ok {
+		movie.Title[movie.OriginalLang] = Title{Lang: movie.OriginalLang, Title: movie.OriginalTitle}
+	}
+	for i := range translations {
+		lang := translations[i].Lang
+		_, ok := supportedLangs[lang]
+		if ok {
+			_, ok := movie.Title[lang]
+			if !ok {
+				movie.Title[lang] = Title{Lang: lang, Title: translations[i].Data.Title}
+			}
 		}
 	}
 
