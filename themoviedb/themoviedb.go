@@ -13,10 +13,28 @@ import (
 	"net/url"
 	"os"
 	"strconv"
+	"sync"
 	"time"
 )
 
-var movieDailyExportMaxSize = 50 * 1024 * 1024 // 50MiB
+const (
+	// The MovieDB API устанавливает ограничение в 40 запросов за 10 секунд.
+	apiRateLimit         = 40
+	apiRateLimitDuration = time.Millisecond * 10000
+)
+
+// Файл с базой фильмов, который предоставляет The MovieDB API, не должен
+// превышать эту константу.
+const movieDailyExportMaxSize = 50 * 1024 * 1024 // 50MiB
+
+// Переменные для контроля лимита запросов. Т.к. The MovieDB API устанавливает
+// лимит запросов на основе IP адреса, создаём эти переменные на уровне пакета,
+// т.е. они будут общими для всех Client'ов.
+var (
+	mu            sync.Mutex
+	reqLimit      int       // Количество доступных запросов.
+	reqLimitStart time.Time // Начало нового отсчёта лимита запросов.
+)
 
 type configuration struct {
 	Images struct {
@@ -38,6 +56,10 @@ type translation struct {
 		Title string `json:"title"`
 	} `json:"data"`
 }
+
+var (
+	ErrRateLimit = errors.New("themoviedb: API rate limit exceeded")
+)
 
 // Client позволяет выполнять запросы к TheMovieDB API.
 type Client struct {
@@ -100,6 +122,11 @@ func (c *Client) Configure() error {
 	query := url.Query()
 	query.Add("api_key", c.key)
 	url.RawQuery = query.Encode()
+
+	err = c.checkRateLimit()
+	if err != nil {
+		return err
+	}
 
 	resp, err := c.httpClient.Get(url.String())
 	if err != nil {
@@ -204,6 +231,11 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	query.Add("api_key", c.key)
 	query.Add("append_to_response", "translations,images")
 	url.RawQuery = query.Encode()
+
+	err = c.checkRateLimit()
+	if err != nil {
+		return Movie{}, err
+	}
 
 	resp, err := c.httpClient.Get(url.String())
 	if err != nil {
@@ -317,6 +349,11 @@ func (c *Client) GetPoster(path string) ([]byte, error) {
 		return nil, err
 	}
 
+	err = c.checkRateLimit()
+	if err != nil {
+		return nil, err
+	}
+
 	resp, err := c.httpClient.Get(url.String())
 	if err != nil {
 		return nil, err
@@ -331,4 +368,18 @@ func (c *Client) GetPoster(path string) ([]byte, error) {
 	}
 
 	return poster, nil
+}
+
+func (c *Client) checkRateLimit() error {
+	mu.Lock()
+	defer mu.Unlock()
+	if reqLimitStart.IsZero() || time.Since(reqLimitStart) > apiRateLimitDuration {
+		reqLimit = apiRateLimit
+		reqLimitStart = time.Now()
+	}
+	if reqLimit == 0 {
+		return ErrRateLimit
+	}
+	reqLimit--
+	return nil
 }
