@@ -39,6 +39,7 @@ func (j *jsonPath) pop() {
 	}
 }
 
+// Filter используется для фильтрации JSON массива.
 type Filter = func(v interface{}) bool
 
 type pathValue struct {

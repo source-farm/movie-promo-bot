@@ -3,3 +3,4 @@
 *.a
 bot
 config.json
+themoviedb/key.txt

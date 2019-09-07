@@ -58,6 +58,7 @@ type translation struct {
 }
 
 var (
+	// Ошибка превышения лимита запросов к The MovieDB API.
 	ErrRateLimit = errors.New("themoviedb: API rate limit exceeded")
 )
 
