@@ -58,17 +58,20 @@ type translation struct {
 }
 
 var (
-	// Ошибка превышения лимита запросов к The MovieDB API.
+	// Превышение лимита запросов к The MovieDB API.
 	ErrRateLimit = errors.New("themoviedb: API rate limit exceeded")
+
+	// Клиент не настроен.
+	ErrConfigure = errors.New("themoviedb: client is not configured (call Configure method)")
 )
 
 // Client позволяет выполнять запросы к TheMovieDB API.
 type Client struct {
-	key            string
-	httpClient     *http.Client
-	apiBaseURL     string
-	config         configuration
-	lastConfigured time.Time
+	key        string
+	httpClient *http.Client
+	apiBaseURL string
+	configMu   sync.Mutex
+	config     configuration
 }
 
 // Title хранит название фильма.
@@ -113,9 +116,12 @@ func NewClient(key string, httpClient *http.Client) *Client {
 
 // Configure получает настройки TheMovieDB API (GET /configuration). Удачный
 // вызов этого метода заполняет поле config клиента, который необходим при
-// выполнении запросов для получения изображений. В документации к
-// TheMovieDB API рекомендуют получать настройки раз в несколько дней.
+// выполнении запросов для получения постеров. В документации к TheMovieDB API
+// рекомендуют получать настройки раз в несколько дней.
 func (c *Client) Configure() error {
+	c.configMu.Lock()
+	defer c.configMu.Unlock()
+
 	url, err := url.Parse(c.apiBaseURL + "/configuration")
 	if err != nil {
 		return err
@@ -333,19 +339,17 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 
 // GetPoster закачивает постер через путь к нему.
 func (c *Client) GetPoster(path string) ([]byte, error) {
-	if time.Since(c.lastConfigured) > time.Second*3600*24 {
-		err := c.Configure()
-		if err != nil {
-			return nil, err
-		}
-		c.lastConfigured = time.Now()
-	}
-
 	// Формируем URL вида
 	//
 	// http://image.tmdb.org/t/p/<size>/<poster>
 	//
+	c.configMu.Lock()
+	if c.config.Images.BaseURL == "" {
+		c.configMu.Unlock()
+		return nil, ErrConfigure
+	}
 	url, err := url.Parse(c.config.Images.BaseURL + "/" + c.config.posterSize + path)
+	c.configMu.Unlock()
 	if err != nil {
 		return nil, err
 	}

@@ -8,8 +8,12 @@ import (
 	"io/ioutil"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
+
+const testMovieID = 550 // Fight Club
 
 func TestDailyExport(t *testing.T) {
 	filename := "daily_export.json.gz"
@@ -41,8 +45,7 @@ func TestGetMovie(t *testing.T) {
 	}
 
 	client := NewClient(key, nil)
-	fightClubID := 550
-	movie, err := client.GetMovie(fightClubID)
+	movie, err := client.GetMovie(testMovieID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -59,24 +62,128 @@ func TestGetPoster(t *testing.T) {
 	}
 
 	client := NewClient(key, nil)
-	fightClubID := 550
-	movie, err := client.GetMovie(fightClubID)
+	err = client.Configure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	movie, err := client.GetMovie(testMovieID)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	poster, ok := movie.Poster[iso6391.En]
 	if !ok {
-		t.Fatal("English poster not found")
+		t.Fatal("No english poster")
 	}
 	data, err := client.GetPoster(poster.Path)
-	if !ok {
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	_, err = jpeg.Decode(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal("Cannot decode poster")
+	}
+}
+
+func TestGetMovieConcurrent(t *testing.T) {
+	key, err := getKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// В результате выполнения предыдущего теста может не остаться запросов.
+	time.Sleep(apiRateLimitDuration)
+
+	client := NewClient(key, nil)
+	start := make(chan struct{})
+	result := make(chan error)
+	var lineUp sync.WaitGroup
+	lineUp.Add(apiRateLimit)
+	for i := 0; i < apiRateLimit; i++ {
+		go func() {
+			lineUp.Done()
+			<-start
+			_, err := client.GetMovie(testMovieID)
+			result <- err
+		}()
+	}
+	lineUp.Wait()
+	close(start)
+	reqFinished := 0
+	timer := time.NewTimer(time.Second * 5)
+loop:
+	for {
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatal(err)
+			}
+			reqFinished++
+			if reqFinished == apiRateLimit {
+				break loop
+			}
+		case <-timer.C:
+			t.Fatal("Timeout")
+		}
+	}
+}
+
+func TestGetPosterConcurrent(t *testing.T) {
+	key, err := getKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// В результате выполнения предыдущего теста может не остаться запросов.
+	time.Sleep(apiRateLimitDuration)
+
+	client := NewClient(key, nil)
+	err = client.Configure()
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	result := make(chan error)
+	var lineUp sync.WaitGroup
+	postersNum := apiRateLimit/2 - 1 // client.Configure() забирает один запрос.
+	lineUp.Add(postersNum)
+	for i := 0; i < postersNum; i++ {
+		go func() {
+			lineUp.Done()
+			<-start
+			movie, _ := client.GetMovie(testMovieID)
+			if poster, ok := movie.Poster[iso6391.En]; ok {
+				data, err := client.GetPoster(poster.Path)
+				if err != nil {
+					result <- err
+				} else {
+					_, err = jpeg.Decode(bytes.NewReader(data))
+					result <- err
+				}
+			} else {
+				result <- errors.New("No english poster")
+			}
+		}()
+	}
+	lineUp.Wait()
+	close(start)
+	reqFinished := 0
+	timer := time.NewTimer(time.Second * 10)
+loop:
+	for {
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatal(err)
+			}
+			reqFinished++
+			if reqFinished == postersNum {
+				break loop
+			}
+		case <-timer.C:
+			t.Fatal("Timeout")
+		}
 	}
 }
 
