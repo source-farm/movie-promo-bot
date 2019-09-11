@@ -150,7 +150,8 @@ func (s *Scanner) SetFilter(filter Filter, path ...string) error {
 }
 
 // Find запускает сканирование JSON потока. Если все указанные через SearchFor
-// значения найдены, то возвращается nil. Иначе возвращается ошибка.
+// пути найдены, то возвращается nil. Нахождение пути необъязательно означает,
+// что значение по этому пути было правильно декодировано.
 func (s *Scanner) Find(stream io.Reader) error {
 	dec := json.NewDecoder(stream)
 	// Пустая строка в paths означает, что нужно декодировать весь JSON. Так и
@@ -270,7 +271,7 @@ func (s *Scanner) Find(stream io.Reader) error {
 
 	for _, value := range s.paths {
 		if !value.found {
-			return errors.New("jsonstream: not all values found")
+			return errors.New("jsonstream: not all paths found")
 		}
 	}
 
