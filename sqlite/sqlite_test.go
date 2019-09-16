@@ -1,10 +1,8 @@
 package sqlite
 
 import (
-	"fmt"
 	"os"
 	"reflect"
-	"strings"
 	"testing"
 )
 
@@ -15,10 +13,11 @@ func TestCreateDB(t *testing.T) {
 
 	conn, err := NewConn(dbName)
 	if err != nil {
-		t.Fatal("Cannot create database")
+		t.Fatal(err)
 	}
-	if conn.Close() != nil {
-		t.Fatal("Cannot close connection")
+	err = conn.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -27,111 +26,130 @@ func TestCreateTable(t *testing.T) {
 
 	conn, err := NewConn(dbName)
 	if err != nil {
-		t.Fatal("Cannot create database")
+		t.Fatal(err)
 	}
-	defer conn.Close()
-	finished, err := conn.Exec("CREATE TABLE test(id INTEGER);")
-	if !finished || err != nil {
-		t.Fatal("Cannot create table")
-	}
-}
 
-func TestMegaQuery(t *testing.T) {
-	defer cleanup()
-	N := 1000000
-
-	conn, err := NewConn(dbName)
+	err = conn.Exec("CREATE TABLE test(id INTEGER);")
 	if err != nil {
-		t.Fatal("Cannot create database")
-	}
-	defer conn.Close()
-	finished, err := conn.Exec("CREATE TABLE test(id INTEGER);")
-	if !finished || err != nil {
-		t.Fatal("Cannot create table")
+		t.Fatal(err)
 	}
 
-	queryBuilder := strings.Builder{}
-	queryBuilder.Write([]byte("INSERT INTO test(id) VALUES (0)"))
-	for i := 1; i < N; i++ {
-		queryBuilder.Write([]byte(fmt.Sprintf(",(%d)", i)))
-	}
-	queryBuilder.Write([]byte(";"))
-
-	megaQuery := queryBuilder.String()
-	finished, err = conn.Exec(megaQuery)
-	if !finished || err != nil {
-		t.Fatal("Cannot insert values")
-	}
-
-	var n, i int64
-	finished, err = conn.Exec("SELECT id FROM test ORDER BY id ASC;")
-	for !finished {
-		err = conn.Column(0, &n)
-		if err != nil {
-			t.Fatal("Error while getting column value")
-		}
-		if n != i {
-			t.Fatalf("Value %d not found in a table", i)
-		}
-		i++
-
-		finished, err = conn.Next()
-		if err != nil {
-			t.Fatal("Error on stepping to next row")
-		}
-	}
-
-	if i != int64(N) {
-		t.Fatalf("Table must have exactly %d rows", N)
+	err = conn.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestColumnTypes(t *testing.T) {
+func TestStmt(t *testing.T) {
 	defer cleanup()
 
 	conn, err := NewConn(dbName)
 	if err != nil {
-		t.Fatal("Cannot create database")
+		t.Fatal(err)
+	}
+
+	// Создаём таблицу.
+	stmt, err := conn.Prepare("CREATE TABLE test(n INTEGER, f REAL, t TEXT, b BLOB);")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = stmt.Exec()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = stmt.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Заполняем таблицу данными.
+	stmt, err = conn.Prepare("INSERT INTO test(n, f, t, b) VALUES(?1, ?2, ?3, ?4);")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = stmt.Exec(1, 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = stmt.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = conn.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestScan(t *testing.T) {
+	defer cleanup()
+
+	conn, err := NewConn(dbName)
+	if err != nil {
+		t.Fatal(err)
 	}
 	defer conn.Close()
-	finished, err := conn.Exec("CREATE TABLE test(n INTEGER, f FLOAT, t TEXT, b BLOB);")
-	if !finished || err != nil {
-		t.Fatal("Cannot create table")
-	}
-
-	finished, err = conn.Exec("INSERT INTO test(n, f, t, b) VALUES(42, 3.14159, 'foo', X'DEADBEEF');")
-	if !finished || err != nil {
-		t.Fatal("Cannot insert values")
-	}
-
-	finished, err = conn.Exec("SELECT n, f, t, b FROM test;")
+	err = conn.Exec("CREATE TABLE test(n INTEGER, f FLOAT, t TEXT, b BLOB);")
 	if err != nil {
-		t.Fatal("Cannot query data")
+		t.Fatal(err)
 	}
 
+	err = conn.Exec("INSERT INTO test(n, f, t, b) VALUES(1, 1.0, 'foo', X'DEADBEEF');")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	stmt, err := conn.Prepare("SELECT n, f, t, b FROM test;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows, err := stmt.Query()
+	if err != nil {
+		t.Fatal(err)
+	}
 	var n int64
-	err = conn.Column(0, &n)
-	if err != nil || n != 42 {
+	var f float64
+	var s string
+	var b []byte
+	if !rows.Next() {
+		t.Fatal("Expected data, got nothing")
+	}
+	err = rows.Scan(&n, &f, &s, &b)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
 		t.Fatal("Cannot query integer column")
 	}
-
-	var f float64
-	err = conn.Column(1, &f)
-	if err != nil || f != 3.14159 {
+	if f != 1.0 {
 		t.Fatal("Cannot query float column")
 	}
-
-	var s string
-	err = conn.Column(2, &s)
-	if err != nil || s != "foo" {
+	if s != "foo" {
 		t.Fatal("Cannot query string column")
 	}
-
-	var b []byte
 	deadbeef := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-	err = conn.Column(3, &b)
-	if err != nil || !reflect.DeepEqual(b, deadbeef) {
+	if !reflect.DeepEqual(b, deadbeef) {
 		t.Fatal("Cannot query binary column")
+	}
+
+	if rows.Next() {
+		t.Fatal("Expected nothing, got data")
+	}
+
+	err = rows.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = stmt.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = conn.Close()
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
