@@ -1,6 +1,7 @@
 package sqlite
 
 import (
+	"fmt"
 	"os"
 	"reflect"
 	"testing"
@@ -62,12 +63,12 @@ func TestStmt(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Заполняем таблицу данными.
+	// Добавляем в таблицу одну строку.
 	stmt, err = conn.Prepare("INSERT INTO test(n, f, t, b) VALUES(?1, ?2, ?3, ?4);")
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = stmt.Exec(1, 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
+	err = stmt.Exec(int64(1), 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,57 +90,65 @@ func TestScan(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+
 	err = conn.Exec("CREATE TABLE test(n INTEGER, f FLOAT, t TEXT, b BLOB);")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	err = conn.Exec("INSERT INTO test(n, f, t, b) VALUES(1, 1.0, 'foo', X'DEADBEEF');")
+	// Заполняем таблицу данными.
+	stmt, err := conn.Prepare("INSERT INTO test(n, f, t, b) VALUES(?1, ?2, ?3, ?4);")
+	if err != nil {
+		t.Fatal(err)
+	}
+	N := 100
+	for i := 1; i <= N; i++ {
+		err := stmt.Exec(int64(i), 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	err = stmt.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	stmt, err := conn.Prepare("SELECT n, f, t, b FROM test;")
+	// Проверяем, что всё записалось.
+	stmt, err = conn.Prepare("SELECT n, f, t, b FROM test ORDER BY n ASC;")
 	if err != nil {
 		t.Fatal(err)
 	}
-	rows, err := stmt.Query()
+	iter, err := stmt.Query()
 	if err != nil {
 		t.Fatal(err)
 	}
-	var n int64
-	var f float64
-	var s string
-	var b []byte
-	if !rows.Next() {
-		t.Fatal("Expected data, got nothing")
-	}
-	err = rows.Scan(&n, &f, &s, &b)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if n != 1 {
-		t.Fatal("Cannot query integer column")
-	}
-	if f != 1.0 {
-		t.Fatal("Cannot query float column")
-	}
-	if s != "foo" {
-		t.Fatal("Cannot query string column")
-	}
+
 	deadbeef := []byte{0xDE, 0xAD, 0xBE, 0xEF}
-	if !reflect.DeepEqual(b, deadbeef) {
-		t.Fatal("Cannot query binary column")
-	}
+	rowNum := 0
+	for iter.Next() {
+		if iter.Err() != nil {
+			t.Fatal(iter.Err())
+		}
 
-	if rows.Next() {
-		t.Fatal("Expected nothing, got data")
+		var n int64
+		var f float64
+		var s string
+		var b []byte
+		err := iter.Scan(&n, &f, &s, &b)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rowNum++
+		if n != int64(rowNum) || f != 1.0 || s != "foo" || !reflect.DeepEqual(b, deadbeef) {
+			t.Fatal("Unexpected value")
+		}
 	}
-
-	err = rows.Close()
-	if err != nil {
-		t.Fatal(err)
+	if iter.Err() != nil {
+		t.Fatal(iter.Err())
+	}
+	if rowNum != N {
+		fmt.Println(rowNum)
+		t.Fatal("Not all rows fetched")
 	}
 
 	err = stmt.Close()

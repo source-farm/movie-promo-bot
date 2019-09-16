@@ -12,83 +12,80 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strconv"
 	"unsafe"
 )
 
 var (
-	ErrConnDone         = errors.New("sqlite: connection is already closed")
-	ErrStmtDone         = errors.New("sqlite: statement is already closed")
-	ErrNoData           = errors.New("sqlite: no data")
-	ErrColumnNum        = errors.New("sqlite: column number exceeds columns count in the result set")
-	ErrColumnNotInteger = errors.New("sqlite: column type isn't INTEGER")
-	ErrColumnNotFloat   = errors.New("sqlite: column type isn't FLOAT")
-	ErrColumnNotText    = errors.New("sqlite: column type isn't TEXT")
-	ErrColumnNotBlob    = errors.New("sqlite: column type isn't BLOB")
-	ErrColumnType       = errors.New("sqlite: unsupported column type")
+	ErrConnDone       = errors.New("sqlite: connection is already closed")
+	ErrStmtDone       = errors.New("sqlite: statement is already closed")
+	ErrEmptyRow       = errors.New("sqlite: row has no columns")
+	ErrColumnMismatch = errors.New("sqlite: columns count mismatch")
+	ErrColumnType     = errors.New("sqlite: unsupported column type")
 )
 
-// Rows используется для итерации по результату запроса.
+// Rows используется для итерации по результату запроса. Rows не является
+// потоко-безопасным.
 type Rows struct {
 	stmt *Stmt
 	done bool
 	err  error
 }
 
-// TODO:
+// Next переходит к следующей строке запроса, которую можно вычитать с помощью
+// метода Scan. Если к следующей строке удалось перейти, то возвращается true.
+// Если при переходе возникла ошибка (можно получить вызовом метода Err) или
+// больше не осталось строк (Err возвращает nil), то возвращается false.
 func (r *Rows) Next() bool {
 	if r.done {
 		return false
 	}
 
-	if r.stmt.stmt == nil {
-		r.done = false
-		r.err = ErrStmtDone
-	} else {
+	if r.stmt.stmt != nil {
 		resCode := C.sqlite3_step(r.stmt.stmt)
 		err := resultCode2GoError(resCode)
 		switch err {
 		case SQLiteDone:
 			r.done = true
 			r.err = nil
-			return false
 
 		case SQLiteRow:
-			r.done = false
 			r.err = nil
 			return true
 
 		default:
-			r.done = false
 			r.err = err
 		}
+	} else {
+		// Пока Rows не дошёл до конца был закрыт Stmt, из которого и был
+		// получен Rows.
+		r.err = ErrStmtDone
 	}
 
 	return false
 }
 
-// TODO:
-func (r *Rows) Close() error {
-	return nil
-}
-
-// TODO:
+// Err возвращает последнюю ошибку, которая могла возникнуть после вызова Next.
 func (r *Rows) Err() error {
 	return r.err
 }
 
-// TODO:
+// Scan сканирует по очереди колонки в текущей строке в указатели из dest.
+// Указатели могут быть типа *int64, *float64, *string, *[]byte для получения
+// значения целочисленной, вещественной, строковой или бинарной колонки
+// соответственно.
 func (r *Rows) Scan(dest ...interface{}) error {
 	if r.stmt.stmt == nil {
 		return ErrStmtDone
 	}
 
 	colsCount := int(C.sqlite3_data_count(r.stmt.stmt))
-	if colsCount <= 0 || colsCount != len(dest) {
-		return ErrNoData
+	if colsCount <= 0 {
+		return ErrEmptyRow
 	}
 
 	if colsCount != len(dest) {
-		return ErrColumnNum
+		return ErrColumnMismatch
 	}
 
 	for i := range dest {
@@ -97,26 +94,26 @@ func (r *Rows) Scan(dest ...interface{}) error {
 		switch value := dest[i].(type) {
 		case *int64:
 			if colType != C.SQLITE_INTEGER {
-				return ErrColumnNotInteger
+				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't INTEGER")
 			}
 			*value = int64(C.sqlite3_column_int64(r.stmt.stmt, colNum))
 
 		case *float64:
 			if colType != C.SQLITE_FLOAT {
-				return ErrColumnNotFloat
+				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't REAL")
 			}
 			*value = float64(C.sqlite3_column_double(r.stmt.stmt, colNum))
 
 		case *string:
 			if colType != C.SQLITE_TEXT {
-				return ErrColumnNotText
+				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't TEXT")
 			}
 			cStr := C.sqlite3_column_text(r.stmt.stmt, colNum)
 			*value = C.GoString((*C.char)(unsafe.Pointer(cStr)))
 
 		case *[]byte:
 			if colType != C.SQLITE_BLOB {
-				return ErrColumnNotBlob
+				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't BLOB")
 			}
 			blob := C.sqlite3_column_blob(r.stmt.stmt, colNum)
 			blobSize := C.sqlite3_column_bytes(r.stmt.stmt, colNum)
@@ -130,12 +127,14 @@ func (r *Rows) Scan(dest ...interface{}) error {
 	return nil
 }
 
-// Stmt - это скомпилированное SQL-предложение (SQL statement).
+// Stmt - это скомпилированное SQL-предложение (SQL statement). Stmt не
+// является потоко-безопасным.
 type Stmt struct {
 	stmt *C.struct_sqlite3_stmt
 }
 
-// TODO:
+// Exec выполняет скомпилированное SQL-предложение. Аргументы args
+// подставляются в предложение перед его выполнением.
 func (s *Stmt) Exec(args ...interface{}) error {
 	if s.stmt == nil {
 		return ErrStmtDone
@@ -155,7 +154,9 @@ func (s *Stmt) Exec(args ...interface{}) error {
 	return err
 }
 
-// TODO:
+// Query выполняет скомпилированный запрос. Аргументы args подставляются в
+// запрос перед его выполнением. Если нет ошибок, то *Rows позволяет получить
+// все строки выполненного запроса.
 func (s *Stmt) Query(args ...interface{}) (*Rows, error) {
 	if s.stmt == nil {
 		return nil, ErrStmtDone
@@ -170,8 +171,8 @@ func (s *Stmt) Query(args ...interface{}) (*Rows, error) {
 	return &rows, nil
 }
 
-// TODO: дополнить комментарий.
-// bind связывает перемеданные параметры с SQL-предложением (SQL-statement).
+// bind подставляет аргументы args с SQL-предложение. args может содержать
+// только значения типа int64, float64, string или []byte.
 func (s *Stmt) bind(args ...interface{}) error {
 	if s.stmt == nil {
 		return ErrStmtDone
@@ -184,7 +185,7 @@ func (s *Stmt) bind(args ...interface{}) error {
 		return err
 	}
 
-	// Очищаем binding'и (sqlite3_reset этого не делает).
+	// Очищаем подставновки (sqlite3_reset этого не делает).
 	resCode = C.sqlite3_clear_bindings(s.stmt)
 	err = resultCode2GoError(resCode)
 	if err != nil {
@@ -194,9 +195,6 @@ func (s *Stmt) bind(args ...interface{}) error {
 	for i, arg := range args {
 		argType := reflect.TypeOf(arg)
 		switch argType.Kind() {
-		case reflect.Int:
-			resCode = C.sqlite3_bind_int64(s.stmt, C.int(i+1), C.sqlite3_int64(arg.(int)))
-
 		case reflect.Int64:
 			resCode = C.sqlite3_bind_int64(s.stmt, C.int(i+1), C.sqlite3_int64(arg.(int64)))
 
@@ -226,7 +224,6 @@ func (s *Stmt) bind(args ...interface{}) error {
 			// (https://www.sqlite.org/c3ref/bind_blob.html), когда безопасно
 			// освобождать передаваемый в SQLite указатель на данные cData.
 			resCode = C.sqlite3_bind_blob(s.stmt, C.int(i+1), cData, C.int(len(data)), C.SQLITE_TRANSIENT)
-			break
 
 		default:
 			argTypeStr := fmt.Sprintf("%T", arg)
@@ -257,7 +254,7 @@ func (s *Stmt) Close() error {
 	return nil
 }
 
-// Conn - это одно соединение с БД.
+// Conn - это одно соединение с БД. Conn не является потоко-безопасным.
 type Conn struct {
 	db *C.struct_sqlite3
 }
@@ -315,7 +312,9 @@ func (c *Conn) Prepare(query string) (*Stmt, error) {
 }
 
 // Close закрывает соединение с БД. Должен быть объязательно вызван после
-// окончания работы с соединением, чтобы не было утечек ресурсов.
+// окончания работ с соединением, чтобы не было утечек ресурсов. Нельзя
+// закрыть соединение пока есть не закрытые Stmt, которые были созданы из этого
+// соединения.
 func (c *Conn) Close() error {
 	if c.db == nil {
 		return nil
