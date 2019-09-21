@@ -19,7 +19,7 @@ import (
 var (
 	ErrConnDone       = errors.New("sqlite: connection is already closed")
 	ErrStmtDone       = errors.New("sqlite: statement is already closed")
-	ErrEmptyRow       = errors.New("sqlite: row has no columns")
+	ErrNoRows         = errors.New("sqlite: no rows in result set")
 	ErrColumnMismatch = errors.New("sqlite: columns count mismatch")
 	ErrColumnType     = errors.New("sqlite: unsupported column type")
 )
@@ -81,7 +81,7 @@ func (r *Rows) Scan(dest ...interface{}) error {
 
 	colsCount := int(C.sqlite3_data_count(r.stmt.stmt))
 	if colsCount <= 0 {
-		return ErrEmptyRow
+		return ErrNoRows
 	}
 
 	if colsCount != len(dest) {
@@ -127,6 +127,23 @@ func (r *Rows) Scan(dest ...interface{}) error {
 	return nil
 }
 
+// Row используется для получения первой строки запроса. Row не является
+// потоко-безопасным.
+type Row struct {
+	rows *Rows
+	err  error
+}
+
+// Scan сканирует по очереди колонки из первой строки в dest. Более подробно
+// можно прочитать в описании метода Rows.Scan.
+func (r *Row) Scan(dest ...interface{}) error {
+	if r.err != nil {
+		return r.err
+	}
+
+	return r.rows.Scan(dest...)
+}
+
 // Stmt - это скомпилированное SQL-предложение (SQL statement). Stmt не
 // является потоко-безопасным.
 type Stmt struct {
@@ -169,6 +186,29 @@ func (s *Stmt) Query(args ...interface{}) (*Rows, error) {
 
 	rows := Rows{stmt: s, done: false, err: nil}
 	return &rows, nil
+}
+
+// QueryRow выполняет скомпилированный запрос. Аргументы args подставляются в
+// запрос перед его выполнением. Если во время выполнения запроса возникнет
+// ошибка, то её можно получить вызовом Scan для возвращаемого *Row, который
+// никогда не равен nil. Если результатом выполнения запроса является пустое
+// множество строк, то Scan для *Row возвращает ErrNoRows. Иначе Scan сканирует
+// первую строку и игнорирует остальные.
+func (s *Stmt) QueryRow(args ...interface{}) *Row {
+	rows, err := s.Query(args...)
+	switch {
+	case err != nil:
+		return &Row{rows: nil, err: err}
+
+	case rows.Next():
+		return &Row{rows: rows, err: nil}
+
+	case rows.Err() == nil:
+		return &Row{rows: nil, err: ErrNoRows}
+
+	default:
+		return &Row{rows: nil, err: rows.Err()}
+	}
 }
 
 // bind подставляет аргументы args с SQL-предложение. args может содержать
