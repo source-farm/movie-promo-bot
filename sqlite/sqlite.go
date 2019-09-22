@@ -151,7 +151,8 @@ type Stmt struct {
 }
 
 // Exec выполняет скомпилированное SQL-предложение. Аргументы args
-// подставляются в предложение перед его выполнением.
+// подставляются в предложение перед его выполнением. Какого типа аргументы
+// можно передавать можно узнать в описании метода Stmt.bind.
 func (s *Stmt) Exec(args ...interface{}) error {
 	if s.stmt == nil {
 		return ErrStmtDone
@@ -172,8 +173,9 @@ func (s *Stmt) Exec(args ...interface{}) error {
 }
 
 // Query выполняет скомпилированный запрос. Аргументы args подставляются в
-// запрос перед его выполнением. Если нет ошибок, то *Rows позволяет получить
-// все строки выполненного запроса.
+// запрос перед его выполнением. Какого типа аргументы можно передавать можно
+// узнать в описании метода Stmt.bind. Если нет ошибок, то *Rows позволяет
+// получить все строки выполненного запроса.
 func (s *Stmt) Query(args ...interface{}) (*Rows, error) {
 	if s.stmt == nil {
 		return nil, ErrStmtDone
@@ -212,7 +214,7 @@ func (s *Stmt) QueryRow(args ...interface{}) *Row {
 }
 
 // bind подставляет аргументы args с SQL-предложение. args может содержать
-// только значения типа int64, float64, string или []byte.
+// только значения типа int, int64, float64, string или []byte.
 func (s *Stmt) bind(args ...interface{}) error {
 	if s.stmt == nil {
 		return ErrStmtDone
@@ -235,6 +237,9 @@ func (s *Stmt) bind(args ...interface{}) error {
 	for i, arg := range args {
 		argType := reflect.TypeOf(arg)
 		switch argType.Kind() {
+		case reflect.Int:
+			resCode = C.sqlite3_bind_int(s.stmt, C.int(i+1), C.int(arg.(int)))
+
 		case reflect.Int64:
 			resCode = C.sqlite3_bind_int64(s.stmt, C.int(i+1), C.sqlite3_int64(arg.(int64)))
 
