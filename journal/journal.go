@@ -22,6 +22,7 @@ func init() {
 	}()
 }
 
+// Level обозначает уровень логирования.
 type Level uint8
 
 func (l Level) String() string {
