@@ -194,6 +194,9 @@ func (c *Client) GetDailyExport(year, month, day int, filename string) (err erro
 		return err
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("themoviedb: " + resp.Status)
+	}
 
 	bodySize, err := strconv.Atoi(resp.Header.Get("Content-Length"))
 	if err != nil {
@@ -254,6 +257,7 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	}
 
 	movie := Movie{}
+	// TODO: создать и настроить сканер один раз и вынести в Client.
 	//- Настройка сканирования ответного JSON'а.
 	scanner := jsonstream.NewScanner()
 	scanner.SearchFor(&movie.TMDBID, "id")
