@@ -1,34 +1,41 @@
 package main
 
 import (
+	"bot/journal"
 	"encoding/json"
 	"io/ioutil"
-	"log"
 	"os"
 )
 
 type config struct {
-	ThemoviedbKey string `json:"themoviedb_key"`
+	TheMovieDBKey string `json:"themoviedb_key"`
 	TelegramToken string `json:"telegram_token"`
+	DBName        string `json:"db_name"`
 }
 
 func main() {
+	journal.Info("application start")
+
 	// Вычитывание настроек.
+	journal.Info("reading config file")
 	f, err := os.Open("config.json")
 	if err != nil {
-		log.Fatal(err)
+		journal.Fatal(err)
 	}
 	configRaw, err := ioutil.ReadAll(f)
 	f.Close()
 	if err != nil {
-		log.Fatal(err)
+		journal.Fatal(err)
 	}
 	var cfg config
 	err = json.Unmarshal(configRaw, &cfg)
 	if err != nil {
-		log.Fatal(err)
+		journal.Fatal(err)
 	}
+	journal.Info("config file read ok")
 
-	go tmdbCrawler(cfg.ThemoviedbKey)
+	// Горутина для пополнения БД фильмами.
+	journal.Info("starting movie info fetch goroutine")
+	go theMovieDBCrawler(cfg.TheMovieDBKey, cfg.DBName)
 	select {}
 }
