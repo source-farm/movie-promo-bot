@@ -13,11 +13,7 @@ import (
 func init() {
 	go func() {
 		for msg := range msgQueue {
-			if msg.level != LevFatal {
-				logger.Print(msg.level, " ", msg.location, ": ", msg.msg)
-			} else {
-				logger.Fatal(LevFatal, " ", msg.location, ": ", msg.msg)
-			}
+			logger.Print(msg.level, " ", msg.location, ": ", msg.msg)
 		}
 	}()
 }
