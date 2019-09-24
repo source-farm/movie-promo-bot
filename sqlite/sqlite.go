@@ -237,6 +237,13 @@ func (s *Stmt) bind(args ...interface{}) error {
 	for i, arg := range args {
 		argType := reflect.TypeOf(arg)
 		switch argType.Kind() {
+		case reflect.Bool:
+			v := 0
+			if arg.(bool) {
+				v = 1
+			}
+			resCode = C.sqlite3_bind_int(s.stmt, C.int(i+1), C.int(v))
+
 		case reflect.Int:
 			resCode = C.sqlite3_bind_int(s.stmt, C.int(i+1), C.int(arg.(int)))
 
@@ -354,6 +361,14 @@ func (c *Conn) Prepare(query string) (*Stmt, error) {
 	}
 
 	return stmt, nil
+}
+
+// SetBusyTimeout устанавливает таймаут ожидания выполнения запроса, если БД
+// была в этот момент занята чем-то другим.
+func (c *Conn) SetBusyTimeout(ms int) error {
+	resCode := C.sqlite3_busy_timeout(c.db, C.int(ms))
+	err := resultCode2GoError(resCode)
+	return err
 }
 
 // Close закрывает соединение с БД. Должен быть объязательно вызван после
