@@ -19,8 +19,8 @@ import (
 
 const (
 	// The MovieDB API устанавливает ограничение в 40 запросов за 10 секунд.
-	apiRateLimit         = 40
-	apiRateLimitDuration = time.Millisecond * 10000
+	apiRateLimit    = 40
+	APIRateLimitDur = time.Millisecond * 10000
 )
 
 // Файл с базой фильмов, который предоставляет The MovieDB API, не должен
@@ -87,7 +87,7 @@ type Poster struct {
 	VoteAverage float64          `json:"vote_average"`
 }
 
-// Movie представляет собой информацию об одном фильме.
+// Movie - это информация об одном фильме.
 type Movie struct {
 	TMDBID        int
 	IMDBID        string
@@ -118,6 +118,8 @@ func NewClient(key string, httpClient *http.Client) *Client {
 // вызов этого метода заполняет поле config клиента, который необходим при
 // выполнении запросов для получения постеров. В документации к TheMovieDB API
 // рекомендуют получать настройки раз в несколько дней.
+// При возврате ошибки ErrRateLimit нужно ждать некоторое время перед
+// выполнением следующим вызовом.
 func (c *Client) Configure() error {
 	c.configMu.Lock()
 	defer c.configMu.Unlock()
@@ -228,6 +230,8 @@ func (c *Client) GetDailyExport(year, month, day int, filename string) (err erro
 }
 
 // GetMovie возвращает информацию о фильме с идентификатором id.
+// При возврате ошибки ErrRateLimit нужно ждать некоторое время перед
+// выполнением следующим вызовом.
 func (c *Client) GetMovie(id int) (Movie, error) {
 	// Формируем URL вида
 	//
@@ -342,6 +346,8 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 }
 
 // GetPoster закачивает постер через путь к нему.
+// При возврате ошибки ErrRateLimit нужно ждать некоторое время перед
+// выполнением следующим вызовом.
 func (c *Client) GetPoster(path string) ([]byte, error) {
 	// Формируем URL вида
 	//
@@ -382,7 +388,7 @@ func (c *Client) GetPoster(path string) ([]byte, error) {
 func (c *Client) checkRateLimit() error {
 	mu.Lock()
 	defer mu.Unlock()
-	if reqLimitStart.IsZero() || time.Since(reqLimitStart) > apiRateLimitDuration {
+	if reqLimitStart.IsZero() || time.Since(reqLimitStart) > APIRateLimitDur {
 		reqLimit = apiRateLimit
 		reqLimitStart = time.Now()
 	}
