@@ -4,9 +4,11 @@ package themoviedb
 import (
 	"bot/iso6391"
 	"bot/jsonstream"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image/jpeg"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -378,6 +380,12 @@ func (c *Client) GetPoster(path string) ([]byte, error) {
 		return nil, errors.New("themoviedb: " + resp.Status)
 	}
 	poster, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+
+	// Простая проверка, что полученные данные являются JPEG картинкой.
+	_, err = jpeg.DecodeConfig(bytes.NewReader(poster))
 	if err != nil {
 		return nil, err
 	}

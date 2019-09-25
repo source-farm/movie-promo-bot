@@ -93,7 +93,7 @@ func TestGetMovieConcurrent(t *testing.T) {
 	}
 
 	// В результате выполнения предыдущего теста может не остаться запросов.
-	time.Sleep(apiRateLimitDuration)
+	time.Sleep(APIRateLimitDur)
 
 	client := NewClient(key, nil)
 	start := make(chan struct{})
@@ -136,7 +136,7 @@ func TestGetPosterConcurrent(t *testing.T) {
 	}
 
 	// В результате выполнения предыдущего теста может не остаться запросов.
-	time.Sleep(apiRateLimitDuration)
+	time.Sleep(APIRateLimitDur)
 
 	client := NewClient(key, nil)
 	err = client.Configure()
