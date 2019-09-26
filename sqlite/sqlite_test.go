@@ -30,7 +30,7 @@ func TestCreateTable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = conn.Exec("CREATE TABLE test(id INTEGER);")
+	_, err = conn.Exec("CREATE TABLE test(id INTEGER);")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,7 +54,7 @@ func TestStmt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = stmt.Exec()
+	_, err = stmt.Exec()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,9 +68,16 @@ func TestStmt(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = stmt.Exec(int64(1), 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
+	result, err := stmt.Exec(int64(1), 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
 	if err != nil {
 		t.Fatal(err)
+	}
+	rowsInserted, err := result.RowsAffected()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rowsInserted != 1 {
+		t.Fatal("Expected 1 row insert")
 	}
 	err = stmt.Close()
 	if err != nil {
@@ -91,7 +98,7 @@ func TestRowsScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = conn.Exec("CREATE TABLE test(n INTEGER, f FLOAT, t TEXT, b BLOB);")
+	_, err = conn.Exec("CREATE TABLE test(n INTEGER, f FLOAT, t TEXT, b BLOB);")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,9 +110,25 @@ func TestRowsScan(t *testing.T) {
 	}
 	N := 100
 	for i := 1; i <= N; i++ {
-		err := stmt.Exec(int64(i), 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
+		result, err := stmt.Exec(int64(i), 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		rowsInserted, err := result.RowsAffected()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rowsInserted != 1 {
+			t.Fatal("Expected 1 row insert")
+		}
+
+		id, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id != int64(i) {
+			t.Fatalf("Expected row id %d, got %d", i, id)
 		}
 	}
 	err = stmt.Close()
@@ -170,7 +193,7 @@ func TestRowScan(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	err = conn.Exec("CREATE TABLE test(n INTEGER, f FLOAT, t TEXT, b BLOB);")
+	_, err = conn.Exec("CREATE TABLE test(n INTEGER, f FLOAT, t TEXT, b BLOB);")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -200,9 +223,25 @@ func TestRowScan(t *testing.T) {
 	}
 	N := 3
 	for i := 1; i <= N; i++ {
-		err := insertStmt.Exec(int64(i), 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
+		result, err := insertStmt.Exec(int64(i), 1.0, "foo", []byte{0xDE, 0xAD, 0xBE, 0xEF})
 		if err != nil {
 			t.Fatal(err)
+		}
+
+		rowsInserted, err := result.RowsAffected()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rowsInserted != 1 {
+			t.Fatal("Expected 1 row insert")
+		}
+
+		id, err := result.LastInsertId()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if id != int64(i) {
+			t.Fatalf("Expected row id %d, got %d", i, id)
 		}
 	}
 	err = insertStmt.Close()

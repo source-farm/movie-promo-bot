@@ -144,32 +144,67 @@ func (r *Row) Scan(dest ...interface{}) error {
 	return r.rows.Scan(dest...)
 }
 
+// Result - это результат выполнения запроса.
+type Result interface {
+	LastInsertId() (int64, error)
+	RowsAffected() (int64, error)
+}
+
+// sqliteResult позволяет получить результат выполнения запроса.
+type sqliteResult struct {
+	conn *Conn
+}
+
+// LastInsertId позволяет получить идентификатор последней успешно
+// добавленной с помощью INSERT строки в таблицу (если проще, значение поля
+// типа INTEGER PRIMARY KEY последней вставленной строки).
+func (r *sqliteResult) LastInsertId() (int64, error) {
+	if r.conn.db == nil {
+		return 0, ErrConnDone
+	}
+
+	id := C.sqlite3_last_insert_rowid(r.conn.db)
+	return int64(id), nil
+}
+
+// RowsAffected возвращает количество добавленных, изменённых или удалённых
+// строк последних успешно выполненных запросов INSERT, UPDATE или DELETE.
+func (r *sqliteResult) RowsAffected() (int64, error) {
+	if r.conn.db == nil {
+		return 0, ErrConnDone
+	}
+
+	affected := C.sqlite3_changes(r.conn.db)
+	return int64(affected), nil
+}
+
 // Stmt - это скомпилированное SQL-предложение (SQL statement). Stmt не
 // является потоко-безопасным.
 type Stmt struct {
+	conn *Conn
 	stmt *C.struct_sqlite3_stmt
 }
 
 // Exec выполняет скомпилированное SQL-предложение. Аргументы args
 // подставляются в предложение перед его выполнением. Какого типа аргументы
 // можно передавать можно узнать в описании метода Stmt.bind.
-func (s *Stmt) Exec(args ...interface{}) error {
+func (s *Stmt) Exec(args ...interface{}) (Result, error) {
 	if s.stmt == nil {
-		return ErrStmtDone
+		return nil, ErrStmtDone
 	}
 
 	err := s.bind(args...)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	resCode := C.sqlite3_step(s.stmt)
 	err = resultCode2GoError(resCode)
 	if err == SQLiteDone {
-		return nil
+		return &sqliteResult{conn: s.conn}, nil
 	}
 
-	return err
+	return nil, err
 }
 
 // Query выполняет скомпилированный запрос. Аргументы args подставляются в
@@ -329,9 +364,9 @@ func NewConn(dbFilename string) (*Conn, error) {
 }
 
 // Exec выполняет запрос query.
-func (c *Conn) Exec(query string) error {
+func (c *Conn) Exec(query string) (Result, error) {
 	if c.db == nil {
-		return ErrConnDone
+		return nil, ErrConnDone
 	}
 
 	queryCStr := C.CString(query)
@@ -339,10 +374,10 @@ func (c *Conn) Exec(query string) error {
 	resCode := C.sqlite3_exec(c.db, queryCStr, nil, nil, nil)
 	err := resultCode2GoError(resCode)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	return nil
+	return &sqliteResult{conn: c}, nil
 }
 
 // Prepare компилирует запрос query.
@@ -354,6 +389,7 @@ func (c *Conn) Prepare(query string) (*Stmt, error) {
 	queryCStr := C.CString(query)
 	defer C.free(unsafe.Pointer(queryCStr))
 	stmt := new(Stmt)
+	stmt.conn = c
 	resCode := C.sqlite3_prepare_v2(c.db, queryCStr, C.int(-1), &stmt.stmt, nil)
 	err := resultCode2GoError(resCode)
 	if err != nil {
