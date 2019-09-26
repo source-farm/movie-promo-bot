@@ -94,26 +94,26 @@ func (r *Rows) Scan(dest ...interface{}) error {
 		switch value := dest[i].(type) {
 		case *int64:
 			if colType != C.SQLITE_INTEGER {
-				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't INTEGER")
+				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't INTEGER (it's " + sqliteColumnTypeToString(colType) + ")")
 			}
 			*value = int64(C.sqlite3_column_int64(r.stmt.stmt, colNum))
 
 		case *float64:
 			if colType != C.SQLITE_FLOAT {
-				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't REAL")
+				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't REAL (it's " + sqliteColumnTypeToString(colType) + ")")
 			}
 			*value = float64(C.sqlite3_column_double(r.stmt.stmt, colNum))
 
 		case *string:
 			if colType != C.SQLITE_TEXT {
-				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't TEXT")
+				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't TEXT (it's " + sqliteColumnTypeToString(colType) + ")")
 			}
 			cStr := C.sqlite3_column_text(r.stmt.stmt, colNum)
 			*value = C.GoString((*C.char)(unsafe.Pointer(cStr)))
 
 		case *[]byte:
 			if colType != C.SQLITE_BLOB {
-				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't BLOB")
+				return errors.New("sqlite: column " + strconv.Itoa(i) + " isn't BLOB (it's " + sqliteColumnTypeToString(colType) + ")")
 			}
 			blob := C.sqlite3_column_blob(r.stmt.stmt, colNum)
 			blobSize := C.sqlite3_column_bytes(r.stmt.stmt, colNum)
@@ -429,4 +429,26 @@ func (c *Conn) Close() error {
 // Version возвращает версию библиотеки SQLite.
 func Version() string {
 	return C.GoString(C.sqlite3_libversion())
+}
+
+// sqliteColumnTypeToString преобразовывает тип SQLite в строковый вид.
+func sqliteColumnTypeToString(columnType C.int) string {
+	switch columnType {
+	case C.SQLITE_INTEGER:
+		return "INTEGER"
+
+	case C.SQLITE_FLOAT:
+		return "REAL"
+
+	case C.SQLITE_TEXT:
+		return "TEXT"
+
+	case C.SQLITE_BLOB:
+		return "BLOB"
+
+	case C.SQLITE_NULL:
+		return "NULL"
+	}
+
+	return "UNKNOWN"
 }
