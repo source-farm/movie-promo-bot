@@ -127,6 +127,16 @@ func (r *Rows) Scan(dest ...interface{}) error {
 	return nil
 }
 
+// Close закрывает Rows.
+func (r *Rows) Close() error {
+	if r.stmt.stmt == nil {
+		return ErrStmtDone
+	}
+
+	resCode := C.sqlite3_reset(r.stmt.stmt)
+	return resultCode2GoError(resCode)
+}
+
 // Row используется для получения первой строки запроса. Row не является
 // потоко-безопасным.
 type Row struct {
@@ -141,7 +151,9 @@ func (r *Row) Scan(dest ...interface{}) error {
 		return r.err
 	}
 
-	return r.rows.Scan(dest...)
+	err := r.rows.Scan(dest...)
+	r.rows.Close()
+	return err
 }
 
 // Result - это результат выполнения запроса.
