@@ -21,6 +21,7 @@ const (
 	enMovieMinRank     = 1.5
 	crawlersNum        = 3
 	movieFetchMaxFails = 3
+	tmdbMaxRetries     = 3
 	dbBusyTimeoutMS    = 10000
 
 	movieInsertQuery = `
@@ -340,7 +341,7 @@ mainLoop:
 		var err error
 		// Получаем общие данные фильма.
 	movieFetchLoop:
-		for i := 0; i < 3; i++ {
+		for i := 0; i < tmdbMaxRetries; i++ {
 			journal.Trace(crawlerID, " fetching movie [", id, "]")
 			movie, err = client.GetMovie(id)
 			switch err {
@@ -349,17 +350,20 @@ mainLoop:
 				break movieFetchLoop
 
 			case themoviedb.ErrRateLimit:
-				journal.Info(crawlerID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
-				time.Sleep(themoviedb.APIRateLimitDur)
+				if i == (tmdbMaxRetries - 1) {
+					journal.Error(crawlerID, " movie [", id, "] fetch fail")
+				} else {
+					journal.Info(crawlerID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
+					time.Sleep(themoviedb.APIRateLimitDur)
+				}
 
 			default:
-				journal.Error(crawlerID, " ", err)
+				journal.Error(crawlerID, " movie [", id, "] fetch error: ", err)
 				break movieFetchLoop
 			}
 		}
 		if err != nil {
-			journal.Info(crawlerID, " cannot fetch movie [", id, "]")
-			_, err := movieFetchFailStmt.Exec(id)
+			_, err = movieFetchFailStmt.Exec(id)
 			if err != nil {
 				journal.Error(crawlerID, " ", err)
 			}
@@ -373,6 +377,7 @@ mainLoop:
 			title string
 		}
 		var posters []posterData
+		err = nil
 	posterLoop:
 		for _, poster := range movie.Poster {
 			// Если нет названия фильма на том же языке, что и постер, то не
@@ -383,7 +388,7 @@ mainLoop:
 			var image []byte
 
 		posterFetchLoop:
-			for i := 0; i < 3; i++ {
+			for i := 0; i < tmdbMaxRetries; i++ {
 				journal.Trace(crawlerID, " fetching movie [", id, "] poster ("+poster.Lang+")")
 				image, err = client.GetPoster(poster.Path)
 				switch err {
@@ -394,17 +399,20 @@ mainLoop:
 					break posterFetchLoop
 
 				case themoviedb.ErrRateLimit:
-					journal.Info(crawlerID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
-					time.Sleep(themoviedb.APIRateLimitDur)
+					if i == (tmdbMaxRetries - 1) {
+						journal.Error(crawlerID, " movie [", id, "] poster ("+poster.Lang+") fetch fail")
+					} else {
+						journal.Info(crawlerID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
+						time.Sleep(themoviedb.APIRateLimitDur)
+					}
 
 				default:
-					journal.Error(crawlerID + " " + err.Error())
+					journal.Error(crawlerID, " movie [", id, "] poster ("+poster.Lang+") fetch error: ", err)
 					break posterLoop
 				}
 			}
 		}
 		if err != nil {
-			journal.Info(crawlerID, " movie [", id, "] posters fetch fail")
 			_, err := movieFetchFailStmt.Exec(id)
 			if err != nil {
 				journal.Info(crawlerID, " ", err)
@@ -434,7 +442,6 @@ mainLoop:
 		if err != nil {
 			goto DBError
 		}
-		journal.Info(crawlerID, " movie [", id, "] add to database OK")
 
 		// Получаем идентификатор, с которым фильм был добавлен в таблицу movie.
 		movieDatabaseID, err = result.LastInsertId()
@@ -467,6 +474,8 @@ mainLoop:
 		err = conn.Commit()
 		if err != nil {
 			journal.Error(crawlerID, " ", err)
+		} else {
+			journal.Info(crawlerID, " movie [", id, "] add to database OK")
 		}
 		continue mainLoop
 
