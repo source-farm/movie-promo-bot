@@ -32,10 +32,10 @@ func main() {
 	if err != nil {
 		journal.Fatal(err)
 	}
-	journal.Info("config file read ok")
+	journal.Info("config file read OK")
 
 	// Горутина для пополнения БД фильмами.
-	journal.Info("starting movie info fetch goroutine")
+	journal.Info("starting movies fetch goroutine")
 	go theMovieDBCrawler(cfg.TheMovieDBKey, cfg.DBName)
 	select {}
 }
