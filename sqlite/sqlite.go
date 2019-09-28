@@ -407,6 +407,24 @@ func (c *Conn) SetBusyTimeout(ms int) error {
 	return err
 }
 
+// Begin начинает транзакцию.
+func (c *Conn) Begin() error {
+	_, err := c.Exec("BEGIN TRANSACTION;")
+	return err
+}
+
+// Commit завершает транзакцию.
+func (c *Conn) Commit() error {
+	_, err := c.Exec("COMMIT;")
+	return err
+}
+
+// Rollback откатывает изменения транзакции.
+func (c *Conn) Rollback() error {
+	_, err := c.Exec("ROLLBACK;")
+	return err
+}
+
 // Close закрывает соединение с БД. Должен быть объязательно вызван после
 // окончания работ с соединением, чтобы не было утечек ресурсов. Нельзя
 // закрыть соединение пока есть не закрытые Stmt, которые были созданы из этого
