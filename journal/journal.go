@@ -13,7 +13,9 @@ import (
 func init() {
 	go func() {
 		for msg := range msgQueue {
-			logger.Print(msg.level, " ", msg.location, ": ", msg.msg)
+			fullMsg := []interface{}{msg.level, " ", msg.location, ": "}
+			fullMsg = append(fullMsg, msg.args...)
+			logger.Print(fullMsg...)
 		}
 	}()
 }
@@ -44,7 +46,7 @@ func (l Level) String() string {
 type logMsg struct {
 	level    Level
 	location string
-	msg      interface{}
+	args     []interface{}
 }
 
 // Уровни логирования.
@@ -67,32 +69,34 @@ var (
 	mu       sync.RWMutex
 )
 
-// Fatal логирует сообщение msg и заканчивает выполнение приложения.
-func Fatal(msg interface{}) {
+// Fatal логирует сообщение в args и заканчивает выполнение приложения.
+func Fatal(args ...interface{}) {
 	_, file, line, ok := runtime.Caller(1)
 	location := ""
 	if ok {
 		location = path.Base(file) + ":" + strconv.Itoa(line)
 	}
-	logger.Fatal(LevFatal, " ", location, ": ", msg)
+	fullMsg := []interface{}{LevFatal, " ", location, ": "}
+	fullMsg = append(fullMsg, args...)
+	logger.Fatal(fullMsg...)
 }
 
 // Error логирует ошибки.
 // Уровень логирования должен быть LevError или выше.
-func Error(msg interface{}) {
-	addToQueue(LevError, msg)
+func Error(args ...interface{}) {
+	addToQueue(LevError, args...)
 }
 
 // Info логирует информационные сообщения.
 // Уровень логирования должен быть LevInfo или выше.
-func Info(msg interface{}) {
-	addToQueue(LevInfo, msg)
+func Info(args ...interface{}) {
+	addToQueue(LevInfo, args...)
 }
 
 // Trace логирует всё.
 // Уровень логирования должен быть LevTrace.
-func Trace(msg interface{}) {
-	addToQueue(LevTrace, msg)
+func Trace(args ...interface{}) {
+	addToQueue(LevTrace, args...)
 }
 
 // SetLevel устанавливает уровень логирования.
@@ -102,7 +106,7 @@ func SetLevel(level Level) {
 	curLevel = level
 }
 
-func addToQueue(level Level, msg interface{}) {
+func addToQueue(level Level, args ...interface{}) {
 	mu.RLock()
 	defer mu.RUnlock()
 	if curLevel >= level {
@@ -112,7 +116,7 @@ func addToQueue(level Level, msg interface{}) {
 			location = path.Base(file) + ":" + strconv.Itoa(line)
 		}
 		select {
-		case msgQueue <- logMsg{level: level, location: location, msg: msg}:
+		case msgQueue <- logMsg{level: level, location: location, args: args}:
 		default:
 		}
 	}
