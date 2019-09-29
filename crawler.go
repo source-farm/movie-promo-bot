@@ -44,13 +44,13 @@ VALUES (?1, ?2, ?3, ?4);
 	movieFetchSuccessQuery = `
 INSERT INTO movie_fetch (tmdb_id, complete)
 VALUES (?1, 1)
-ON CONFLICT (tmdb_id) DO UPDATE SET complete = 1;
+ON CONFLICT (tmdb_id) DO UPDATE SET complete = 1, updated_on = datetime('now');
 `
 
 	movieFetchFailQuery = `
 INSERT INTO movie_fetch (tmdb_id, fail)
 VALUES (?1, 1)
-ON CONFLICT (tmdb_id) DO UPDATE SET fail = fail + 1;
+ON CONFLICT (tmdb_id) DO UPDATE SET fail = fail + 1, updated_on = datetime('now');
 `
 
 	movieFetchResultQuery = `
@@ -108,7 +108,10 @@ CREATE TABLE IF NOT EXISTS movie (
     release_date   TEXT    NOT NULL,
     adult          INTEGER NOT NULL,
     imdb_id        INTEGER,
-    popularity     REAL);
+    popularity     REAL,
+    created_on     TEXT DEFAULT (datetime('now')),
+    updated_on     TEXT
+);
 `
 	_, err = con.Exec(query)
 	if err != nil {
@@ -123,7 +126,10 @@ CREATE TABLE IF NOT EXISTS movie_detail (
     fk_movie_id REFERENCES movie(id) NOT NULL,
     lang        TEXT NOT NULL,
     title       TEXT NOT NULL,
-    poster      BLOB);
+    poster      BLOB,
+    created_on  TEXT DEFAULT (datetime('now')),
+    updated_on  TEXT
+);
 `
 	_, err = con.Exec(query)
 	if err != nil {
@@ -134,10 +140,12 @@ CREATE TABLE IF NOT EXISTS movie_detail (
 	//- Таблица для хранения результата получения информации о фильме.
 	query = `
 CREATE TABLE IF NOT EXISTS movie_fetch (
-    id       INTEGER PRIMARY KEY,
-    tmdb_id  INTEGER NOT NULL UNIQUE,
-    complete INTEGER DEFAULT 0, -- Если равен 1, то вся информация о фильме получена.
-    fail     INTEGER DEFAULT 0  -- Количество неудачных попыток получения информации о фильме.
+    id         INTEGER PRIMARY KEY,
+    tmdb_id    INTEGER NOT NULL UNIQUE,
+    complete   INTEGER DEFAULT 0, -- Если равен 1, то вся информация о фильме получена.
+    fail       INTEGER DEFAULT 0, -- Количество неудачных попыток получения информации о фильме.
+    created_on TEXT DEFAULT (datetime('now')),
+    updated_on TEXT
 );
 `
 	_, err = con.Exec(query)
