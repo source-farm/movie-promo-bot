@@ -9,6 +9,7 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"math/rand"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -23,6 +24,7 @@ const (
 	movieFetchMaxFails = 3
 	tmdbMaxRetries     = 3
 	dbBusyTimeoutMS    = 10000
+	httpReqTimeout     = time.Second * 15
 
 	movieInsertQuery = `
 INSERT INTO movie (tmdb_id, original_title, original_lang, release_date, adult, imdb_id, popularity)
@@ -72,9 +74,10 @@ type movieBrief struct {
 func theMovieDBCrawler(key, dbName string) {
 	initDB(dbName)
 
-	// TODO: необходимо передавать более тонко настроенный http.Client с не
-	// бесконечным временем ожидания данных от сервера.
-	tmdb := themoviedb.NewClient(key, nil)
+	httpClient := &http.Client{
+		Timeout: httpReqTimeout,
+	}
+	tmdb := themoviedb.NewClient(key, httpClient)
 	err := tmdb.Configure()
 	if err != nil {
 		journal.Fatal(err)
