@@ -14,7 +14,7 @@ type config struct {
 }
 
 func main() {
-	journal.Info("application start")
+	journal.Info("application started")
 
 	// Вычитывание настроек.
 	journal.Info("reading config file")

@@ -8,11 +8,11 @@ import (
 	"bufio"
 	"compress/gzip"
 	"encoding/json"
-	"math/rand"
 	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -69,37 +69,16 @@ type movieBrief struct {
 	Popularity float64 `json:"popularity"`
 }
 
-// theMovieDBCrawler заполняет локальную базу фильмов, скачивая информацию о
-// них по The MovieDB API.
-func theMovieDBCrawler(key, dbName string) {
-	initDB(dbName)
-
-	httpClient := &http.Client{
-		Timeout: httpReqTimeout,
-	}
-	tmdb := themoviedb.NewClient(key, httpClient)
-	err := tmdb.Configure()
-	if err != nil {
-		journal.Fatal(err)
-	}
-
-	movieIDs := make(chan int)
-	go findNewMovies(tmdb, dbName, movieIDs)
-	for i := 0; i < crawlersNum; i++ {
-		go crawler(tmdb, dbName, movieIDs)
-	}
-}
-
 // Инициализация БД фильмов.
-func initDB(dbName string) {
-	journal.Info("initialising database " + dbName)
+func initDB(goID, dbName string) {
+	journal.Info(goID, " initialising database "+dbName)
 
 	con, err := sqlite.NewConn(dbName)
 	if err != nil {
 		journal.Fatal(err)
 	}
 	defer con.Close()
-	journal.Trace("connected to " + dbName)
+	journal.Trace(goID, " connected to "+dbName)
 
 	//- Основная таблица с информацией о фильме.
 	query := `
@@ -118,9 +97,9 @@ CREATE TABLE IF NOT EXISTS movie (
 `
 	_, err = con.Exec(query)
 	if err != nil {
-		journal.Fatal(err)
+		journal.Fatal(goID, " ", err)
 	}
-	journal.Trace("table movie create OK")
+	journal.Trace(goID, " table movie create OK")
 
 	//- Таблица с дополнительной информацией о фильме из таблицы movie.
 	query = `
@@ -136,9 +115,9 @@ CREATE TABLE IF NOT EXISTS movie_detail (
 `
 	_, err = con.Exec(query)
 	if err != nil {
-		journal.Fatal(err)
+		journal.Fatal(goID, " ", err)
 	}
-	journal.Trace("table movie_detail create OK")
+	journal.Trace(goID, " table movie_detail create OK")
 
 	//- Таблица для хранения результата получения информации о фильме.
 	query = `
@@ -153,23 +132,77 @@ CREATE TABLE IF NOT EXISTS movie_fetch (
 `
 	_, err = con.Exec(query)
 	if err != nil {
-		journal.Fatal(err)
+		journal.Fatal(goID, " ", err)
 	}
-	journal.Trace("table movie_fetch create OK")
+	journal.Trace(goID, " table movie_fetch create OK")
 
-	journal.Info("database " + dbName + " init OK")
+	journal.Info(goID, " database "+dbName+" init OK")
+}
+
+// theMovieDBCrawler заполняет локальную базу фильмов, скачивая информацию о
+// них по The MovieDB API.
+func theMovieDBCrawler(key, dbName string) {
+	goID := "[go tmdb-main]:"
+	journal.Info(goID, " started")
+
+	initDB(goID, dbName)
+
+	httpClient := &http.Client{
+		Timeout: httpReqTimeout,
+	}
+	tmdbClient := themoviedb.NewClient(key, httpClient)
+	err := tmdbClient.Configure()
+	if err != nil {
+		journal.Fatal(goID, " ", err)
+	}
+
+	var wg sync.WaitGroup
+
+	for {
+		journal.Info(goID, " starting new movies fetch")
+		wg.Add(crawlersNum)
+
+		movieIDs := make(chan int)
+		// findNewMovies записывает в канал movieIDs идентификаторы ещё не
+		// скачанных фильмов. Горутины crawler извлекают эти идентификаторы из
+		// movieIDs и выполняют фактическую работу по скачиванию и добавлению
+		// фильмов в БД.
+		go findNewMovies(tmdbClient, dbName, movieIDs)
+		for i := 0; i < crawlersNum; i++ {
+			crawlerID := "[go tmdb-worker-" + strconv.Itoa(i+1) + "]:"
+			go crawler(crawlerID, &wg, tmdbClient, dbName, movieIDs)
+		}
+
+		wg.Wait()
+		journal.Info(goID, " new movies fetch finished")
+
+		// После завершения сессии получения фильмов ждём 1 день перед следующей сессией.
+		journal.Info(goID, " sleeping for 1 day")
+		time.Sleep(time.Hour * 24)
+
+		// Пытаемся снова сконфигурировать The Movie DB API клиента, т.к.
+		// документация рекомендует это делать раз в несколько дней.
+		err := tmdbClient.Configure()
+		if err != nil {
+			journal.Error(goID, " ", err)
+		}
+	}
 }
 
 // findNewMovies записывает в канал movieIDs идентификаторы новых фильмов.
 func findNewMovies(client *themoviedb.Client, dbName string, movieIDs chan<- int) {
-	daily := "daily"
+	goID := "[go tmdb-seeker]:"
+	dailyExportFilename := "daily"
+
+	journal.Info(goID, " started")
 
 	// Очистка.
 	defer func() {
-		if _, err := os.Stat(daily); err == nil {
-			os.Remove(daily)
+		if _, err := os.Stat(dailyExportFilename); err == nil {
+			os.Remove(dailyExportFilename)
 		}
 		close(movieIDs)
+		journal.Info(goID, " finished")
 	}()
 
 	// Скачиваем базу с краткой информацией о всех фильмах за какой-либо из
@@ -178,31 +211,31 @@ func findNewMovies(client *themoviedb.Client, dbName string, movieIDs chan<- int
 	now := time.Now()
 	for i := 1; i <= 5; i++ {
 		date := now.AddDate(0, 0, -i)
-		journal.Info("downloading daily export for " + date.Format("2006-01-02"))
+		journal.Info(goID, " downloading daily export for "+date.Format("2006-01-02"))
 		year, month, day := date.Date()
-		err = client.GetDailyExport(year, int(month), day, daily)
+		err = client.GetDailyExport(year, int(month), day, dailyExportFilename)
 		if err == nil {
-			journal.Info("daily export for " + date.Format("2006-01-02") + " download OK")
+			journal.Info(goID, " daily export for "+date.Format("2006-01-02")+" download OK")
 			break
 		} else {
-			journal.Error("daily export for "+date.Format("2006-01-02")+" download fail: ", err)
+			journal.Error(goID, " daily export for "+date.Format("2006-01-02")+" download fail: ", err)
 		}
 	}
 	if err != nil {
-		journal.Error("cannot download daily export for any of 5 previous days")
+		journal.Error(goID, " cannot download daily export for any of 5 previous days")
 		return
 	}
 
 	// Полученный файл - это архив gzip. Извлекаем из него данные на лету.
-	f, err := os.Open(daily)
+	f, err := os.Open(dailyExportFilename)
 	if err != nil {
-		journal.Error(err)
+		journal.Error(goID, " ", err)
 		return
 	}
 	defer f.Close()
 	uncompressed, err := gzip.NewReader(f)
 	if err != nil {
-		journal.Error(err)
+		journal.Error(goID, " ", err)
 		return
 	}
 	defer uncompressed.Close()
@@ -210,18 +243,18 @@ func findNewMovies(client *themoviedb.Client, dbName string, movieIDs chan<- int
 	// Установка связи с БД, подготовка запросов.
 	conn, err := sqlite.NewConn(dbName)
 	if err != nil {
-		journal.Error(err)
+		journal.Error(goID, " ", err)
 		return
 	}
 	defer conn.Close()
 	err = conn.SetBusyTimeout(dbBusyTimeoutMS)
 	if err != nil {
-		journal.Error(err)
+		journal.Error(goID, " ", err)
 		return
 	}
 	fetchResultStmt, err := conn.Prepare(movieFetchResultQuery)
 	if err != nil {
-		journal.Error(err)
+		journal.Error(goID, " ", err)
 		return
 	}
 	defer fetchResultStmt.Close()
@@ -251,20 +284,20 @@ mainLoop:
 				fallthrough
 
 			case sqlite.ErrLocked:
-				journal.Error(err, ", sleeping for 1 sec")
+				journal.Error(goID, " ", err, ", sleeping for 1 sec")
 				time.Sleep(time.Second)
 
 			default:
-				journal.Error(err)
+				journal.Error(goID, " ", err)
 				continue mainLoop
 			}
 		}
 
 		if complete == 1 {
-			journal.Trace("movie [", movie.ID, "] is already fetched, skipping")
+			journal.Trace(goID, " movie [", movie.ID, "] is already fetched, skipping")
 			continue
 		} else if failsNum >= movieFetchMaxFails {
-			journal.Info("movie [", movie.ID, "] has to many fetch fails, skipping")
+			journal.Info(goID, " movie [", movie.ID, "] has to many fetch fails, skipping")
 			continue
 		}
 
@@ -278,14 +311,19 @@ mainLoop:
 	}
 	err = scanner.Err()
 	if err != nil {
-		journal.Error(err)
+		journal.Error(goID, " ", err)
 	}
 }
 
 // crawler - это одна горутина для скачивания информации о фильме по
 // The MovieDB API и записи этой информации в БД.
-func crawler(client *themoviedb.Client, dbName string, movieIDs <-chan int) {
-	crawlerID := "[go " + genRandString(5) + "]"
+func crawler(goID string, wg *sync.WaitGroup, client *themoviedb.Client, dbName string, movieIDs <-chan int) {
+	defer wg.Done()
+
+	journal.Info(goID, " started")
+	defer func() {
+		journal.Info(goID, " finished")
+	}()
 
 	// Установка соединения с БД и её настройка.
 	conn, err := sqlite.NewConn(dbName)
@@ -294,55 +332,55 @@ func crawler(client *themoviedb.Client, dbName string, movieIDs <-chan int) {
 		return
 	}
 	defer conn.Close()
-	journal.Info(crawlerID, " connected to database"+dbName)
+	journal.Info(goID, " connected to database "+dbName)
 
 	err = conn.SetBusyTimeout(dbBusyTimeoutMS)
 	if err != nil {
-		journal.Error(err)
+		journal.Error(goID, " ", err)
 		return
 	}
-	journal.Trace(crawlerID, " set database connection busy timeout to ", dbBusyTimeoutMS, " ms")
+	journal.Trace(goID, " set database connection busy timeout to ", dbBusyTimeoutMS, " ms")
 
 	// Подготавливаем запросы.
 	movieInsertStmt, err := conn.Prepare(movieInsertQuery)
 	if err != nil {
-		journal.Fatal(err)
+		journal.Fatal(goID, " ", err)
 		return
 	}
 	defer movieInsertStmt.Close()
-	journal.Trace(crawlerID, " movie insert query prepared")
+	journal.Trace(goID, " movie insert query prepared")
 
 	movieIDStmt, err := conn.Prepare(movieIDQuery)
 	if err != nil {
-		journal.Fatal(err)
+		journal.Fatal(goID, " ", err)
 		return
 	}
 	defer movieIDStmt.Close()
-	journal.Trace(crawlerID, " movie id query prepared")
+	journal.Trace(goID, " movie id query prepared")
 
 	posterInsertStmt, err := conn.Prepare(posterInsertQuery)
 	if err != nil {
-		journal.Fatal(err)
+		journal.Fatal(goID, " ", err)
 		return
 	}
 	defer posterInsertStmt.Close()
-	journal.Trace(crawlerID, " poster insert query prepared")
+	journal.Trace(goID, " poster insert query prepared")
 
 	movieFetchFailStmt, err := conn.Prepare(movieFetchFailQuery)
 	if err != nil {
-		journal.Fatal(err)
+		journal.Fatal(goID, " ", err)
 		return
 	}
 	defer movieFetchFailStmt.Close()
-	journal.Trace(crawlerID, " movie fetch fail query prepared")
+	journal.Trace(goID, " movie fetch fail query prepared")
 
 	movieFetchSuccessStmt, err := conn.Prepare(movieFetchSuccessQuery)
 	if err != nil {
-		journal.Fatal(err)
+		journal.Fatal(goID, " ", err)
 		return
 	}
 	defer movieFetchSuccessStmt.Close()
-	journal.Trace(crawlerID, " movie fetch success query prepared")
+	journal.Trace(goID, " movie fetch success query prepared")
 
 	rateLimitStr := strconv.Itoa(int(themoviedb.APIRateLimitDur.Seconds()))
 	// Закачиваем фильмы.
@@ -353,30 +391,30 @@ mainLoop:
 		// Получаем общие данные фильма.
 	movieFetchLoop:
 		for i := 0; i < tmdbMaxRetries; i++ {
-			journal.Trace(crawlerID, " fetching movie [", id, "]")
+			journal.Trace(goID, " fetching movie [", id, "]")
 			movie, err = client.GetMovie(id)
 			switch err {
 			case nil:
-				journal.Info(crawlerID, " movie [", id, "] fetch OK")
+				journal.Info(goID, " movie [", id, "] fetch OK")
 				break movieFetchLoop
 
 			case themoviedb.ErrRateLimit:
 				if i == (tmdbMaxRetries - 1) {
-					journal.Error(crawlerID, " movie [", id, "] fetch fail")
+					journal.Error(goID, " movie [", id, "] fetch fail")
 				} else {
-					journal.Info(crawlerID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
+					journal.Info(goID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
 					time.Sleep(themoviedb.APIRateLimitDur)
 				}
 
 			default:
-				journal.Error(crawlerID, " movie [", id, "] fetch error: ", err)
+				journal.Error(goID, " movie [", id, "] fetch error: ", err)
 				break movieFetchLoop
 			}
 		}
 		if err != nil {
 			_, err = movieFetchFailStmt.Exec(id)
 			if err != nil {
-				journal.Error(crawlerID, " ", err)
+				journal.Error(goID, " ", err)
 			}
 			continue
 		}
@@ -400,25 +438,25 @@ mainLoop:
 
 		posterFetchLoop:
 			for i := 0; i < tmdbMaxRetries; i++ {
-				journal.Trace(crawlerID, " fetching movie [", id, "] poster ("+poster.Lang+")")
+				journal.Trace(goID, " fetching movie [", id, "] poster ("+poster.Lang+")")
 				image, err = client.GetPoster(poster.Path)
 				switch err {
 				case nil:
-					journal.Info(crawlerID, " movie [", id, "] poster ("+poster.Lang+") fetch OK")
+					journal.Info(goID, " movie [", id, "] poster ("+poster.Lang+") fetch OK")
 					title := movie.Title[poster.Lang].Title
 					posters = append(posters, posterData{image: image, lang: poster.Lang, title: title})
 					break posterFetchLoop
 
 				case themoviedb.ErrRateLimit:
 					if i == (tmdbMaxRetries - 1) {
-						journal.Error(crawlerID, " movie [", id, "] poster ("+poster.Lang+") fetch fail")
+						journal.Error(goID, " movie [", id, "] poster ("+poster.Lang+") fetch fail")
 					} else {
-						journal.Info(crawlerID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
+						journal.Info(goID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
 						time.Sleep(themoviedb.APIRateLimitDur)
 					}
 
 				default:
-					journal.Error(crawlerID, " movie [", id, "] poster ("+poster.Lang+") fetch error: ", err)
+					journal.Error(goID, " movie [", id, "] poster ("+poster.Lang+") fetch error: ", err)
 					break posterLoop
 				}
 			}
@@ -426,7 +464,7 @@ mainLoop:
 		if err != nil {
 			_, err := movieFetchFailStmt.Exec(id)
 			if err != nil {
-				journal.Info(crawlerID, " ", err)
+				journal.Info(goID, " ", err)
 			}
 			continue
 		}
@@ -434,7 +472,7 @@ mainLoop:
 		// Добавляем полученные данные в БД.
 		err = conn.Begin()
 		if err != nil {
-			journal.Error(crawlerID, " cannot begin transaction: ", err)
+			journal.Error(goID, " cannot begin transaction: ", err)
 			continue
 		}
 
@@ -484,32 +522,17 @@ mainLoop:
 		// Если мы дошли до этого места, то значит все данные готовы к добавлению в БД.
 		err = conn.Commit()
 		if err != nil {
-			journal.Error(crawlerID, " ", err)
+			journal.Error(goID, " ", err)
 		} else {
-			journal.Info(crawlerID, " movie [", id, "] add to database OK")
+			journal.Info(goID, " movie [", id, "] add to database OK")
 		}
 		continue mainLoop
 
 	DBError:
-		journal.Error(crawlerID, " ", err, ", rolling back")
+		journal.Error(goID, " ", err, ", rolling back")
 		err = conn.Rollback()
 		if err != nil {
-			journal.Error(crawlerID, " ", err)
+			journal.Error(goID, " ", err)
 		}
 	}
-}
-
-// Строка длины length из случайных букв верхнего регистра английского
-// алфавита.
-func genRandString(length int) string {
-	if length <= 0 {
-		return ""
-	}
-
-	randStr := ""
-	alphabet := []rune("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
-	for i := 0; i < length; i++ {
-		randStr = randStr + string(alphabet[rand.Intn(length)])
-	}
-	return randStr
 }
