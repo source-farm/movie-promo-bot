@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"image/jpeg"
+	"image/png"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -387,7 +388,11 @@ func (c *Client) GetPoster(path string) ([]byte, error) {
 	// Простая проверка, что полученные данные являются JPEG картинкой.
 	_, err = jpeg.DecodeConfig(bytes.NewReader(poster))
 	if err != nil {
-		return nil, err
+		// Если данные не являются JPEG картинкой, то проверяем являются ли они PNG.
+		_, err = png.DecodeConfig(bytes.NewReader(poster))
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	return poster, nil
