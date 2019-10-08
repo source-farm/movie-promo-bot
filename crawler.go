@@ -27,7 +27,7 @@ const (
 	httpReqTimeout     = time.Second * 15
 
 	movieInsertQuery = `
-INSERT INTO movie (tmdb_id, original_title, original_lang, release_date, adult, imdb_id, popularity)
+INSERT INTO movie (tmdb_id, original_title, original_lang, released_on, adult, imdb_id, popularity)
 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
 ON CONFLICT (tmdb_id) DO NOTHING;
 `
@@ -87,7 +87,7 @@ CREATE TABLE IF NOT EXISTS movie (
     tmdb_id        INTEGER NOT NULL UNIQUE,
     original_title TEXT    NOT NULL,
     original_lang  TEXT    NOT NULL,
-    release_date   TEXT    NOT NULL,
+    released_on    TEXT    NOT NULL,
     adult          INTEGER NOT NULL,
     imdb_id        INTEGER,
     popularity     REAL,
@@ -297,7 +297,7 @@ mainLoop:
 			journal.Trace(goID, " movie [", movie.ID, "] is already fetched, skipping")
 			continue
 		} else if failsNum >= movieFetchMaxFails {
-			journal.Info(goID, " movie [", movie.ID, "] has to many fetch fails, skipping")
+			journal.Info(goID, " movie [", movie.ID, "] has too many fetch fails, skipping")
 			continue
 		}
 
@@ -416,6 +416,11 @@ mainLoop:
 			if err != nil {
 				journal.Error(goID, " ", err)
 			}
+			continue
+		}
+
+		if movie.ReleaseDate.After(time.Now()) {
+			journal.Info(goID, " movie [", id, "] has still not released, skip")
 			continue
 		}
 
