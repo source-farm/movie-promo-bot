@@ -77,12 +77,6 @@ type Client struct {
 	config     configuration
 }
 
-// Title хранит название фильма.
-type Title struct {
-	Lang  iso6391.LangCode `json:"iso_639_1"`
-	Title string           `json:"title"`
-}
-
 // Poster хранит информацию о постере фильма.
 type Poster struct {
 	Lang        iso6391.LangCode `json:"iso_639_1"`
@@ -100,7 +94,7 @@ type Movie struct {
 	ReleaseDate   time.Time
 	VoteCount     int
 	VoteAverage   float64
-	Title         map[iso6391.LangCode]Title
+	Title         map[iso6391.LangCode]string
 	Poster        map[iso6391.LangCode]Poster
 }
 
@@ -265,7 +259,6 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	}
 
 	movie := Movie{}
-	// TODO: создать и настроить сканер один раз и вынести в Client.
 	//- Настройка сканирования ответного JSON'а.
 	scanner := jsonstream.NewScanner()
 	scanner.SearchFor(&movie.TMDBID, "id")
@@ -301,23 +294,27 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 		return ok
 	}
 	scanner.SetFilter(posterFilter, "images", "posters")
+
+	//- Собственно само сканирование.
 	err = scanner.Find(resp.Body)
 	if err != nil {
 		return Movie{}, err
 	}
 
+	// Извлекаем дату из строки.
 	dateFormatISO := "2006-01-02"
 	releaseDate, err := time.Parse(dateFormatISO, releaseDateStr)
 	if err == nil {
 		movie.ReleaseDate = releaseDate
 	}
 
+	// Отбираем названия фильмов на поддерживаемых пакетом языках.
 	_, ok := supportedLangs[movie.OriginalLang]
 	if len(translations) > 0 || ok {
-		movie.Title = map[iso6391.LangCode]Title{}
+		movie.Title = map[iso6391.LangCode]string{}
 	}
 	if ok {
-		movie.Title[movie.OriginalLang] = Title{Lang: movie.OriginalLang, Title: movie.OriginalTitle}
+		movie.Title[movie.OriginalLang] = movie.OriginalTitle
 	}
 	for i := range translations {
 		lang := translations[i].Lang
@@ -325,7 +322,7 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 		if ok {
 			_, ok := movie.Title[lang]
 			if !ok {
-				movie.Title[lang] = Title{Lang: lang, Title: translations[i].Data.Title}
+				movie.Title[lang] = translations[i].Data.Title
 			}
 		}
 	}

@@ -467,7 +467,7 @@ mainLoop:
 		posterLoop:
 			for _, poster := range movie.Poster {
 				// Если нет названия фильма на том же языке, что и постер, то не скачиваем постер.
-				if title, ok := movie.Title[poster.Lang]; !ok || title.Title == "" {
+				if title, ok := movie.Title[poster.Lang]; !ok || title == "" {
 					journal.Trace(goID, " movie [", tmdbID, "] has no title for poster ("+poster.Lang+"), skip fetching it")
 					continue
 				}
@@ -485,7 +485,7 @@ mainLoop:
 					switch err {
 					case nil:
 						journal.Info(goID, " movie [", tmdbID, "] poster ("+poster.Lang+") fetch OK")
-						title := movie.Title[poster.Lang].Title
+						title := movie.Title[poster.Lang]
 						posters = append(posters, posterData{image: image, lang: poster.Lang, title: title})
 						break posterFetchLoop
 
