@@ -11,15 +11,17 @@ import (
 	"net/http"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 )
 
 const (
-	ruAlphabet         = "абвгдеёжзийклмнопрстуфхцчшщъыьэюяАБВГДЕЁЖЗИЙКЛМНОПРСТУФХЦЧШЩЪЫЬЭЮЯ"
-	enAlphabet         = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-	enMovieMinRank     = 1.5
+	// Мин. количество голосов по-умолчанию, которое должно быть у фильма чтобы
+	// для него закачался постер.
+	minVoteCountDefault = 100
+	// Мин. количество голосов, которое должно быть у фильма на русском,
+	// чтобы для него закачался постер.
+	minVoteCountRu     = 10
 	crawlersNum        = 3
 	movieFetchMaxFails = 3
 	tmdbMaxRetries     = 3
@@ -27,8 +29,8 @@ const (
 	httpReqTimeout     = time.Second * 15
 
 	movieInsertQuery = `
-INSERT INTO movie (tmdb_id, original_title, original_lang, released_on, adult, imdb_id, popularity)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+INSERT INTO movie (tmdb_id, original_title, original_lang, released_on, adult, imdb_id, vote_count, vote_average)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
 ON CONFLICT (tmdb_id) DO NOTHING;
 `
 
@@ -36,6 +38,12 @@ ON CONFLICT (tmdb_id) DO NOTHING;
 SELECT id
   FROM movie
  WHERE tmdb_id = ?1;
+`
+
+	posterLangQuery = `
+SELECT lang
+  FROM movie_detail
+ WHERE fk_movie_id = ?1;
 `
 
 	posterInsertQuery = `
@@ -64,9 +72,7 @@ SELECT complete, fail
 
 // Краткая информация о фильме из файла ежедневного экспорта The MovieDB API.
 type movieBrief struct {
-	ID         int     `json:"id"`
-	Title      string  `json:"original_title"`
-	Popularity float64 `json:"popularity"`
+	TMDBID int `json:"id"` // Идентификатор фильма в The MovieDB API.
 }
 
 // Инициализация БД фильмов.
@@ -90,7 +96,8 @@ CREATE TABLE IF NOT EXISTS movie (
     released_on    TEXT    NOT NULL,
     adult          INTEGER NOT NULL,
     imdb_id        INTEGER,
-    popularity     REAL,
+    vote_count     INTEGER,
+    vote_average   REAL,
     created_on     TEXT DEFAULT (datetime('now')),
     updated_on     TEXT
 );
@@ -110,7 +117,8 @@ CREATE TABLE IF NOT EXISTS movie_detail (
     title       TEXT NOT NULL,
     poster      BLOB,
     created_on  TEXT DEFAULT (datetime('now')),
-    updated_on  TEXT
+    updated_on  TEXT,
+                UNIQUE (fk_movie_id, lang)
 );
 `
 	_, err = con.Exec(query)
@@ -139,10 +147,9 @@ CREATE TABLE IF NOT EXISTS movie_fetch (
 	journal.Info(goID, " database "+dbName+" init OK")
 }
 
-// theMovieDBCrawler заполняет локальную базу фильмов, скачивая информацию о
-// них по The MovieDB API.
-func theMovieDBCrawler(key, dbName string) {
-	goID := "[go tmdb-main]:"
+// theMovieDBHarvester заполняет локальную базу фильмов через The MovieDB API.
+func theMovieDBHarvester(key, dbName string) {
+	goID := "[go tmdb-harvester]:"
 	journal.Info(goID, " started")
 
 	initDB(goID, dbName)
@@ -162,15 +169,15 @@ func theMovieDBCrawler(key, dbName string) {
 		journal.Info(goID, " starting new movies fetch")
 		wg.Add(crawlersNum)
 
-		movieIDs := make(chan int)
-		// findNewMovies записывает в канал movieIDs идентификаторы ещё не
-		// скачанных фильмов. Горутины crawler извлекают эти идентификаторы из
-		// movieIDs и выполняют фактическую работу по скачиванию и добавлению
-		// фильмов в БД.
-		go findNewMovies(tmdbClient, dbName, movieIDs)
+		movieID := make(chan int)
+		// moviesSeeker записывает в канал movieID идентификаторы ещё не
+		// полностью скачанных фильмов. Горутины tmdbCrawler извлекают эти
+		// идентификаторы из movieID и выполняют фактическую работу по
+		// скачиванию и добавлению фильмов в БД.
+		go tmdbSeeker(tmdbClient, dbName, movieID)
 		for i := 0; i < crawlersNum; i++ {
-			crawlerID := "[go tmdb-worker-" + strconv.Itoa(i+1) + "]:"
-			go crawler(crawlerID, &wg, tmdbClient, dbName, movieIDs)
+			crawlerID := "[go tmdb-crawler-" + strconv.Itoa(i+1) + "]:"
+			go tmdbCrawler(crawlerID, &wg, tmdbClient, dbName, movieID)
 		}
 
 		wg.Wait()
@@ -189,8 +196,9 @@ func theMovieDBCrawler(key, dbName string) {
 	}
 }
 
-// findNewMovies записывает в канал movieIDs идентификаторы новых фильмов.
-func findNewMovies(client *themoviedb.Client, dbName string, movieIDs chan<- int) {
+// tmdbSeeker записывает в канал movieID идентификаторы фильмов, для которых ещё
+// не была найдена вся необходимая информация.
+func tmdbSeeker(client *themoviedb.Client, dbName string, movieID chan<- int) {
 	goID := "[go tmdb-seeker]:"
 	dailyExportFilename := "daily"
 
@@ -201,7 +209,7 @@ func findNewMovies(client *themoviedb.Client, dbName string, movieIDs chan<- int
 		if _, err := os.Stat(dailyExportFilename); err == nil {
 			os.Remove(dailyExportFilename)
 		}
-		close(movieIDs)
+		close(movieID)
 		journal.Info(goID, " finished")
 	}()
 
@@ -265,14 +273,14 @@ mainLoop:
 		movieRaw := scanner.Text()
 		var movie movieBrief
 		err = json.Unmarshal([]byte(movieRaw), &movie)
-		if err != nil || movie.ID == 0 || movie.Title == "" {
+		if err != nil || movie.TMDBID == 0 {
 			continue
 		}
 
 		var complete, failsNum int64
 	dbBusyLoop:
 		for {
-			err = fetchResultStmt.QueryRow(movie.ID).Scan(&complete, &failsNum)
+			err = fetchResultStmt.QueryRow(movie.TMDBID).Scan(&complete, &failsNum)
 			switch err {
 			case nil:
 				fallthrough
@@ -294,20 +302,13 @@ mainLoop:
 		}
 
 		if complete == 1 {
-			journal.Trace(goID, " movie [", movie.ID, "] is already fetched, skipping")
+			journal.Trace(goID, " movie [", movie.TMDBID, "] fetch is complete, skip")
 			continue
 		} else if failsNum >= movieFetchMaxFails {
-			journal.Info(goID, " movie [", movie.ID, "] has too many fetch fails, skipping")
+			journal.Info(goID, " movie [", movie.TMDBID, "] has too many fetch fails, skip")
 			continue
 		}
-
-		switch {
-		case strings.ContainsAny(movie.Title, ruAlphabet):
-			fallthrough
-
-		case strings.ContainsAny(movie.Title, enAlphabet) && movie.Popularity > enMovieMinRank:
-			movieIDs <- movie.ID
-		}
+		movieID <- movie.TMDBID
 	}
 	err = scanner.Err()
 	if err != nil {
@@ -315,9 +316,9 @@ mainLoop:
 	}
 }
 
-// crawler - это одна горутина для скачивания информации о фильме по
-// The MovieDB API и записи этой информации в БД.
-func crawler(goID string, wg *sync.WaitGroup, client *themoviedb.Client, dbName string, movieIDs <-chan int) {
+// tmdbCrawler извлекает по The MovieDB API данные о фильмах из movieID и
+// записывает эти данные в БД.
+func tmdbCrawler(goID string, wg *sync.WaitGroup, client *themoviedb.Client, dbName string, movieID <-chan int) {
 	defer wg.Done()
 
 	journal.Info(goID, " started")
@@ -358,6 +359,14 @@ func crawler(goID string, wg *sync.WaitGroup, client *themoviedb.Client, dbName 
 	defer movieIDStmt.Close()
 	journal.Trace(goID, " movie id query prepared")
 
+	posterLangStmt, err := conn.Prepare(posterLangQuery)
+	if err != nil {
+		journal.Fatal(goID, " ", err)
+		return
+	}
+	defer posterLangStmt.Close()
+	journal.Trace(goID, " poster language query prepared")
+
 	posterInsertStmt, err := conn.Prepare(posterInsertQuery)
 	if err != nil {
 		journal.Fatal(goID, " ", err)
@@ -385,34 +394,34 @@ func crawler(goID string, wg *sync.WaitGroup, client *themoviedb.Client, dbName 
 	rateLimitStr := strconv.Itoa(int(themoviedb.APIRateLimitDur.Seconds()))
 	// Закачиваем фильмы.
 mainLoop:
-	for id := range movieIDs {
+	for tmdbID := range movieID {
 		var movie themoviedb.Movie
 		var err error
 		// Получаем общие данные фильма.
 	movieFetchLoop:
 		for i := 0; i < tmdbMaxRetries; i++ {
-			journal.Trace(goID, " fetching movie [", id, "]")
-			movie, err = client.GetMovie(id)
+			journal.Trace(goID, " fetching movie [", tmdbID, "]")
+			movie, err = client.GetMovie(tmdbID)
 			switch err {
 			case nil:
-				journal.Info(goID, " movie [", id, "] fetch OK")
+				journal.Info(goID, " movie [", tmdbID, "] fetch OK")
 				break movieFetchLoop
 
 			case themoviedb.ErrRateLimit:
 				if i == (tmdbMaxRetries - 1) {
-					journal.Error(goID, " movie [", id, "] fetch fail")
+					journal.Error(goID, " movie [", tmdbID, "] fetch fail")
 				} else {
 					journal.Info(goID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
 					time.Sleep(themoviedb.APIRateLimitDur)
 				}
 
 			default:
-				journal.Error(goID, " movie [", id, "] fetch error: ", err)
+				journal.Error(goID, " movie [", tmdbID, "] fetch error: ", err)
 				break movieFetchLoop
 			}
 		}
 		if err != nil {
-			_, err = movieFetchFailStmt.Exec(id)
+			_, err = movieFetchFailStmt.Exec(tmdbID)
 			if err != nil {
 				journal.Error(goID, " ", err)
 			}
@@ -420,58 +429,89 @@ mainLoop:
 		}
 
 		if movie.ReleaseDate.After(time.Now()) {
-			journal.Info(goID, " movie [", id, "] has still not released, skip")
+			journal.Info(goID, " movie [", tmdbID, "] has still not released, skip")
 			continue
 		}
 
-		// Закачиваем постеры фильма.
+		// Идентификатор фильма в БД, т.е. значение поля основного ключа в таблице movie.
+		var movieDBID int64
+		err = movieIDStmt.QueryRow(tmdbID).Scan(&movieDBID)
+		if err != nil && err != sqlite.ErrNoRows {
+			journal.Error(goID, " ", err)
+			continue
+		}
+
 		type posterData struct {
 			image []byte
 			lang  iso6391.LangCode
 			title string
 		}
 		var posters []posterData
-		err = nil
-	posterLoop:
-		for _, poster := range movie.Poster {
-			// Если нет названия фильма на том же языке, что и постер, то не
-			// скачиваем постер.
-			if _, ok := movie.Title[poster.Lang]; !ok {
+
+		movieHighRanked := false
+		if movie.OriginalLang == iso6391.Ru {
+			movieHighRanked = movie.VoteCount >= minVoteCountRu
+		} else {
+			movieHighRanked = movie.VoteCount >= minVoteCountDefault
+		}
+		// Закачиваем постеры фильма, если фильм популярен.
+		if movieHighRanked {
+			// Находим какие постеры текущего фильма уже есть в БД.
+			inDBPosters, err := findInDBPosters(posterLangStmt, movieDBID)
+			if err != nil {
+				journal.Error(goID, " ", err)
 				continue
 			}
-			var image []byte
 
-		posterFetchLoop:
-			for i := 0; i < tmdbMaxRetries; i++ {
-				journal.Trace(goID, " fetching movie [", id, "] poster ("+poster.Lang+")")
-				image, err = client.GetPoster(poster.Path)
-				switch err {
-				case nil:
-					journal.Info(goID, " movie [", id, "] poster ("+poster.Lang+") fetch OK")
-					title := movie.Title[poster.Lang].Title
-					posters = append(posters, posterData{image: image, lang: poster.Lang, title: title})
-					break posterFetchLoop
+			err = nil
+		posterLoop:
+			for _, poster := range movie.Poster {
+				// Если нет названия фильма на том же языке, что и постер, то не скачиваем постер.
+				if title, ok := movie.Title[poster.Lang]; !ok || title.Title == "" {
+					journal.Trace(goID, " movie [", tmdbID, "] has no title for poster ("+poster.Lang+"), skip fetching it")
+					continue
+				}
+				// Не скачиваем постер, если он уже есть в БД.
+				if _, ok := inDBPosters[poster.Lang]; ok {
+					journal.Trace(goID, " movie [", tmdbID, "] poster ("+poster.Lang+") is already in database, skip fetching it")
+					continue
+				}
+				var image []byte
 
-				case themoviedb.ErrRateLimit:
-					if i == (tmdbMaxRetries - 1) {
-						journal.Error(goID, " movie [", id, "] poster ("+poster.Lang+") fetch fail")
-					} else {
-						journal.Info(goID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
-						time.Sleep(themoviedb.APIRateLimitDur)
+			posterFetchLoop:
+				for i := 0; i < tmdbMaxRetries; i++ {
+					journal.Trace(goID, " fetching movie [", tmdbID, "] poster ("+poster.Lang+")")
+					image, err = client.GetPoster(poster.Path)
+					switch err {
+					case nil:
+						journal.Info(goID, " movie [", tmdbID, "] poster ("+poster.Lang+") fetch OK")
+						title := movie.Title[poster.Lang].Title
+						posters = append(posters, posterData{image: image, lang: poster.Lang, title: title})
+						break posterFetchLoop
+
+					case themoviedb.ErrRateLimit:
+						if i == (tmdbMaxRetries - 1) {
+							journal.Error(goID, " movie [", tmdbID, "] poster ("+poster.Lang+") fetch fail")
+						} else {
+							journal.Info(goID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
+							time.Sleep(themoviedb.APIRateLimitDur)
+						}
+
+					default:
+						journal.Error(goID, " movie [", tmdbID, "] poster ("+poster.Lang+") fetch error: ", err)
+						break posterLoop
 					}
-
-				default:
-					journal.Error(goID, " movie [", id, "] poster ("+poster.Lang+") fetch error: ", err)
-					break posterLoop
 				}
 			}
-		}
-		if err != nil {
-			_, err := movieFetchFailStmt.Exec(id)
 			if err != nil {
-				journal.Info(goID, " ", err)
+				_, err := movieFetchFailStmt.Exec(tmdbID)
+				if err != nil {
+					journal.Info(goID, " ", err)
+				}
+				continue
 			}
-			continue
+		} else {
+			journal.Trace(goID, " movie [", tmdbID, "] is low voted, skip posters fetching")
 		}
 
 		// Добавляем полученные данные в БД.
@@ -481,47 +521,39 @@ mainLoop:
 			continue
 		}
 
-		// Идентификатор фильма в БД, т.е. значение поля основного ключа в таблице movie.
-		var movieDatabaseID int64
-
-		// Добавляем фильм в БД.
-		result, err := movieInsertStmt.Exec(
-			movie.TMDBID,
-			movie.OriginalTitle,
-			movie.OriginalLang,
-			movie.ReleaseDate.Format("2006-01-02"),
-			movie.Adult,
-			movie.IMDBID,
-			movie.Popularity)
-		if err != nil {
-			goto DBError
-		}
-
-		// Получаем идентификатор, с которым фильм был добавлен в таблицу movie.
-		movieDatabaseID, err = result.LastInsertId()
-		if err != nil {
-			goto DBError
-		}
-		// Если фильм уже есть в БД, то получаем его id вручную (PRIMARY KEY).
-		if movieDatabaseID == 0 {
-			err = movieIDStmt.QueryRow(id).Scan(&movieDatabaseID)
+		// Добавляем фильм в таблицу movie, если его там нет.
+		movieInDatabase := movieDBID != 0
+		if !movieInDatabase {
+			journal.Trace(goID, " adding movie [", tmdbID, "] description to database")
+			result, err := movieInsertStmt.Exec(
+				movie.TMDBID,
+				movie.OriginalTitle,
+				movie.OriginalLang,
+				movie.ReleaseDate.Format("2006-01-02"),
+				movie.Adult,
+				movie.IMDBID,
+				movie.VoteCount,
+				movie.VoteAverage)
 			if err != nil {
 				goto DBError
 			}
+
+			// Получаем идентификатор, с которым фильм был добавлен в таблицу movie.
+			movieDBID, err = result.LastInsertId()
+			if err != nil {
+				goto DBError
+			}
+		} else {
+			journal.Trace(goID, " movie [", tmdbID, "] description is already in database, skip adding it to database")
 		}
 
 		// Добавляем постеры в БД.
 		for _, poster := range posters {
-			_, err = posterInsertStmt.Exec(movieDatabaseID, poster.lang, poster.title, poster.image)
+			journal.Trace(goID, " adding movie [", tmdbID, "] poster ("+poster.lang+") to database")
+			_, err = posterInsertStmt.Exec(movieDBID, poster.lang, poster.title, poster.image)
 			if err != nil {
 				goto DBError
 			}
-		}
-
-		// Сохраняем успешность скачивания фильма.
-		_, err = movieFetchSuccessStmt.Exec(id)
-		if err != nil {
-			goto DBError
 		}
 
 		// Если мы дошли до этого места, то значит все данные готовы к добавлению в БД.
@@ -529,7 +561,29 @@ mainLoop:
 		if err != nil {
 			journal.Error(goID, " ", err)
 		} else {
-			journal.Info(goID, " movie [", id, "] add to database OK")
+			inDBPosters, err := findInDBPosters(posterLangStmt, movieDBID)
+			if err != nil {
+				journal.Error(goID, " ", err)
+				continue
+			}
+			_, okEn := inDBPosters[iso6391.En]
+			_, okRu := inDBPosters[iso6391.Ru]
+			movieComplete := okEn && okRu // Все данные о фильме получены.
+
+			// Фиксируем, что все данные фильма получены.
+			if movieComplete || !movieHighRanked {
+				_, err = movieFetchSuccessStmt.Exec(tmdbID)
+				if err != nil {
+					journal.Error(goID, " ", err)
+					continue
+				}
+			}
+
+			if movieInDatabase && len(posters) == 0 {
+				journal.Info(goID, " movie [", tmdbID, "] has nothing new to add to database")
+			} else {
+				journal.Info(goID, " adding movie [", tmdbID, "] data to database OK")
+			}
 		}
 		continue mainLoop
 
@@ -540,4 +594,28 @@ mainLoop:
 			journal.Error(goID, " ", err)
 		}
 	}
+}
+
+// findInDBPosters находит языки, для которых постеры есть в БД.
+func findInDBPosters(stmt *sqlite.Stmt, movieDBID int64) (map[iso6391.LangCode]struct{}, error) {
+	posters := map[iso6391.LangCode]struct{}{}
+
+	rows, err := stmt.Query(movieDBID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var lang string
+		err = rows.Scan(&lang)
+		if err != nil {
+			return nil, err
+		}
+		posters[lang] = struct{}{}
+	}
+	if rows.Err() != nil {
+		return nil, err
+	}
+
+	return posters, nil
 }

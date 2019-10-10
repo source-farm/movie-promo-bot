@@ -98,7 +98,8 @@ type Movie struct {
 	OriginalLang  iso6391.LangCode
 	Adult         bool
 	ReleaseDate   time.Time
-	Popularity    float64
+	VoteCount     int
+	VoteAverage   float64
 	Title         map[iso6391.LangCode]Title
 	Poster        map[iso6391.LangCode]Poster
 }
@@ -274,7 +275,8 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	scanner.SearchFor(&movie.Adult, "adult")
 	var releaseDateStr string
 	scanner.SearchFor(&releaseDateStr, "release_date")
-	scanner.SearchFor(&movie.Popularity, "popularity")
+	scanner.SearchFor(&movie.VoteAverage, "vote_average")
+	scanner.SearchFor(&movie.VoteCount, "vote_count")
 	//- Названия фильма на различных языках.
 	var translations []translation
 	scanner.SearchFor(&translations, "translations", "translations")
