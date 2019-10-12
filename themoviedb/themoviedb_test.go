@@ -14,6 +14,7 @@ import (
 )
 
 const testMovieID = 550 // Fight Club
+const testNowPlayingPage = 1
 
 func TestDailyExport(t *testing.T) {
 	filename := "daily_export.json.gz"
@@ -83,6 +84,29 @@ func TestGetPoster(t *testing.T) {
 	_, err = jpeg.Decode(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal("Cannot decode poster")
+	}
+}
+
+func TestGetNowPlaying(t *testing.T) {
+	key, err := getKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// В результате выполнения предыдущего теста может не остаться запросов.
+	time.Sleep(APIRateLimitDur)
+
+	client := NewClient(key, nil)
+	_, err = client.GetNowPlaying(499)
+	if err != ErrPage {
+		t.Fatalf("expected ErrPage, got %v", err)
+	}
+
+	for i := 0; i < apiRateLimit-1; i++ {
+		_, err := client.GetNowPlaying(i + 1)
+		if err != nil && err != ErrPage {
+			t.Fatal(err)
+		}
 	}
 }
 
@@ -179,6 +203,49 @@ loop:
 			}
 			reqFinished++
 			if reqFinished == postersNum {
+				break loop
+			}
+		case <-timer.C:
+			t.Fatal("Timeout")
+		}
+	}
+}
+
+func TestGetNowPlayingConcurrent(t *testing.T) {
+	key, err := getKey()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// В результате выполнения предыдущего теста может не остаться запросов.
+	time.Sleep(APIRateLimitDur)
+
+	client := NewClient(key, nil)
+	start := make(chan struct{})
+	result := make(chan error)
+	var lineUp sync.WaitGroup
+	lineUp.Add(apiRateLimit)
+	for i := 0; i < apiRateLimit; i++ {
+		go func() {
+			lineUp.Done()
+			<-start
+			_, err := client.GetNowPlaying(testNowPlayingPage)
+			result <- err
+		}()
+	}
+	lineUp.Wait()
+	close(start)
+	reqFinished := 0
+	timer := time.NewTimer(time.Second * 5)
+loop:
+	for {
+		select {
+		case err := <-result:
+			if err != nil {
+				t.Fatal(err)
+			}
+			reqFinished++
+			if reqFinished == apiRateLimit {
 				break loop
 			}
 		case <-timer.C:

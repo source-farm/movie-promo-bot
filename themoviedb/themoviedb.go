@@ -66,6 +66,9 @@ var (
 
 	// Клиент не настроен.
 	ErrConfigure = errors.New("themoviedb: client is not configured (call Configure method)")
+
+	// Запрос несуществующей страницы по пути "/movie/now_playing".
+	ErrPage = errors.New("themoviedb: page not found")
 )
 
 // Client позволяет выполнять запросы к TheMovieDB API.
@@ -86,16 +89,16 @@ type Poster struct {
 
 // Movie - это информация об одном фильме.
 type Movie struct {
-	TMDBID        int
-	IMDBID        string
-	OriginalTitle string
-	OriginalLang  iso6391.LangCode
-	Adult         bool
-	ReleaseDate   time.Time
-	VoteCount     int
-	VoteAverage   float64
-	Title         map[iso6391.LangCode]string
-	Poster        map[iso6391.LangCode]Poster
+	TMDBID        int                         `json:"id"`
+	IMDBID        string                      `json:"imdb_id"`
+	OriginalTitle string                      `json:"original_title"`
+	OriginalLang  iso6391.LangCode            `json:"original_language"`
+	Adult         bool                        `json:"adult"`
+	ReleaseDate   time.Time                   `json:"-"`
+	VoteCount     int                         `json:"vote_count"`
+	VoteAverage   float64                     `json:"vote_average"`
+	Title         map[iso6391.LangCode]string `json:"-"`
+	Poster        map[iso6391.LangCode]Poster `json:"-"`
 }
 
 // NewClient возвращает новый TheMovieDB API клиент. Если httpClient равен
@@ -227,9 +230,9 @@ func (c *Client) GetDailyExport(year, month, day int, filename string) (err erro
 	return nil
 }
 
-// GetMovie возвращает информацию о фильме с идентификатором id.
-// При возврате ошибки ErrRateLimit нужно ждать некоторое время перед
-// выполнением следующим вызовом.
+// GetMovie возвращает информацию о фильме с идентификатором id в базе
+// The MovieDB API. При возврате ошибки ErrRateLimit нужно ждать некоторое время
+// перед выполнением следующего вызова.
 func (c *Client) GetMovie(id int) (Movie, error) {
 	// Формируем URL вида
 	//
@@ -345,6 +348,53 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	}
 
 	return movie, nil
+}
+
+// GetNowPlaying находит фильмы, которые сейчас показывают в кинотеатрах.
+// Фильмы разбиты по страницам, начиная с 1. Если страниц не осталось, то
+// возвращается ошибка ErrPage.
+func (c *Client) GetNowPlaying(page int) ([]Movie, error) {
+	// Формируем URL вида
+	//
+	// http://api.themoviedb.org/3/movie/now_playing?api_key=<key>&page=<pageNum>
+	//
+	url, err := url.Parse(c.apiBaseURL + "/movie/now_playing")
+	if err != nil {
+		return nil, err
+	}
+	query := url.Query()
+	query.Add("api_key", c.key)
+	query.Add("page", strconv.Itoa(page))
+	url.RawQuery = query.Encode()
+
+	err = c.checkRateLimit()
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Get(url.String())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("themoviedb: " + resp.Status)
+	}
+
+	movies := []Movie{}
+	scanner := jsonstream.NewScanner()
+	scanner.SearchFor(&movies, "results")
+	totalPages := 0
+	scanner.SearchFor(&totalPages, "total_pages")
+	err = scanner.Find(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if page > totalPages {
+		return nil, ErrPage
+	}
+
+	return movies, nil
 }
 
 // GetPoster закачивает постер через путь к нему.
