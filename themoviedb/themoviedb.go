@@ -24,11 +24,15 @@ const (
 	// The MovieDB API устанавливает ограничение в 40 запросов за 10 секунд.
 	apiRateLimit    = 40
 	APIRateLimitDur = time.Millisecond * 10000
-)
 
-// Файл с базой фильмов, который предоставляет The MovieDB API, не должен
-// превышать эту константу.
-const movieDailyExportMaxSize = 50 * 1024 * 1024 // 50MiB
+	// Файл с базой фильмов, который предоставляет The MovieDB API, не должен
+	// превышать эту константу.
+	movieDailyExportMaxSize = 50 * 1024 * 1024 // 50MiB
+
+	// Максимальный номер страницы, которую можно запросить по пути
+	// /movie/now_playing при обращении к The MovieDB API.
+	NowPlayingMaxPage = 500
+)
 
 // Переменные для контроля лимита запросов. Т.к. The MovieDB API устанавливает
 // лимит запросов на основе IP адреса, создаём эти переменные на уровне пакета,

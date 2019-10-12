@@ -16,7 +16,7 @@ import (
 )
 
 const (
-	// Мин. количество голосов по-умолчанию, которое должно быть у фильма чтобы
+	// Мин. количество голосов по-умолчанию, которое должно быть у фильма, чтобы
 	// для него закачался постер.
 	minVoteCountDefault = 100
 	// Мин. количество голосов, которое должно быть у фильма на русском,
@@ -51,7 +51,7 @@ INSERT INTO movie_detail (fk_movie_id, lang, title, poster)
 VALUES (?1, ?2, ?3, ?4);
 `
 
-	movieFetchSuccessQuery = `
+	movieFetchCompleteQuery = `
 INSERT INTO movie_fetch (tmdb_id, complete)
 VALUES (?1, 1)
 ON CONFLICT (tmdb_id) DO UPDATE SET complete = 1, updated_on = datetime('now');
@@ -163,6 +163,7 @@ func theMovieDBHarvester(key, dbName string) {
 		journal.Fatal(goID, " ", err)
 	}
 
+	// Для ожидания завершения tmdbCrawler'ов.
 	var wg sync.WaitGroup
 
 	for {
@@ -181,7 +182,7 @@ func theMovieDBHarvester(key, dbName string) {
 		}
 
 		wg.Wait()
-		journal.Info(goID, " new movies fetch finished")
+		journal.Info(goID, " movies fetch finished")
 
 		// После завершения сессии получения фильмов ждём 1 день перед следующей сессией.
 		journal.Info(goID, " sleeping for 1 day")
@@ -204,7 +205,7 @@ func tmdbSeeker(client *themoviedb.Client, dbName string, movieID chan<- int) {
 
 	journal.Info(goID, " started")
 
-	// Очистка.
+	// Очистка по завершению.
 	defer func() {
 		if _, err := os.Stat(dailyExportFilename); err == nil {
 			os.Remove(dailyExportFilename)
@@ -212,41 +213,6 @@ func tmdbSeeker(client *themoviedb.Client, dbName string, movieID chan<- int) {
 		close(movieID)
 		journal.Info(goID, " finished")
 	}()
-
-	// Скачиваем базу с краткой информацией о всех фильмах за какой-либо из
-	// пяти предыдущих дней.
-	var err error
-	now := time.Now()
-	for i := 1; i <= 5; i++ {
-		date := now.AddDate(0, 0, -i)
-		journal.Info(goID, " downloading daily export for "+date.Format("2006-01-02"))
-		year, month, day := date.Date()
-		err = client.GetDailyExport(year, int(month), day, dailyExportFilename)
-		if err == nil {
-			journal.Info(goID, " daily export for "+date.Format("2006-01-02")+" download OK")
-			break
-		} else {
-			journal.Error(goID, " daily export for "+date.Format("2006-01-02")+" download fail: ", err)
-		}
-	}
-	if err != nil {
-		journal.Error(goID, " cannot download daily export for any of 5 previous days")
-		return
-	}
-
-	// Полученный файл - это архив gzip. Извлекаем из него данные на лету.
-	f, err := os.Open(dailyExportFilename)
-	if err != nil {
-		journal.Error(goID, " ", err)
-		return
-	}
-	defer f.Close()
-	uncompressed, err := gzip.NewReader(f)
-	if err != nil {
-		journal.Error(goID, " ", err)
-		return
-	}
-	defer uncompressed.Close()
 
 	// Установка связи с БД, подготовка запросов.
 	conn, err := sqlite.NewConn(dbName)
@@ -267,8 +233,92 @@ func tmdbSeeker(client *themoviedb.Client, dbName string, movieID chan<- int) {
 	}
 	defer fetchResultStmt.Close()
 
-	scanner := bufio.NewScanner(uncompressed)
-mainLoop:
+	// Обрабатываем фильмы, которые сейчас идут в кинотеатрах.
+	journal.Info(goID, " processing now playing movies")
+	rateLimitStr := strconv.Itoa(int(themoviedb.APIRateLimitDur.Seconds()))
+pagesLoop:
+	for page := 1; page <= themoviedb.NowPlayingMaxPage; page++ {
+		var movies []themoviedb.Movie
+		var err error
+	pageFetchLoop:
+		for i := 0; i < tmdbMaxRetries; i++ {
+			journal.Trace(goID, " fetching now playing page #", page)
+			movies, err = client.GetNowPlaying(page)
+			switch err {
+			case nil:
+				journal.Info(goID, " now playing page #", page, " fetch OK")
+				break pageFetchLoop
+
+			case themoviedb.ErrRateLimit:
+				if i == (tmdbMaxRetries - 1) {
+					journal.Info(goID, " now playing page #", page, " fetch fail")
+					break pageFetchLoop
+				} else {
+					journal.Info(goID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
+					time.Sleep(themoviedb.APIRateLimitDur)
+				}
+
+			case themoviedb.ErrPage:
+				break pagesLoop
+
+			default:
+				journal.Error(goID, " now playing page #", page, " fetch error: ", err)
+				break pageFetchLoop
+			}
+		}
+
+		for _, movie := range movies {
+			finished, err := movieFetchFinished(fetchResultStmt, movie.TMDBID, goID)
+			if err != nil {
+				journal.Error(goID, " ", err)
+				continue
+			}
+
+			if !finished {
+				movieID <- movie.TMDBID
+			}
+		}
+	}
+	journal.Info(goID, " now playing movies processing end")
+
+	// Обрабатываем фильмы из базы с краткой информацией о всех фильмах
+	// The MovieDB API. Пытаемся скачать эту базу за какой-либо из пяти
+	// предыдущих дней.
+	now := time.Now()
+	for i := 1; i <= 5; i++ {
+		date := now.AddDate(0, 0, -i)
+		journal.Info(goID, " downloading daily export for "+date.Format("2006-01-02"))
+		year, month, day := date.Date()
+		err = client.GetDailyExport(year, int(month), day, dailyExportFilename)
+		if err == nil {
+			journal.Info(goID, " daily export for "+date.Format("2006-01-02")+" download OK")
+			break
+		} else {
+			journal.Error(goID, " daily export for "+date.Format("2006-01-02")+" download fail: ", err)
+		}
+	}
+	if err != nil {
+		journal.Error(goID, " cannot download daily export for any of 5 previous days")
+		return
+	}
+
+	// Файл базы фильмов - это архив gzip. Извлекаем из него данные на лету.
+	f, err := os.Open(dailyExportFilename)
+	if err != nil {
+		journal.Error(goID, " ", err)
+		return
+	}
+	defer f.Close()
+	gzipReader, err := gzip.NewReader(f)
+	if err != nil {
+		journal.Error(goID, " ", err)
+		return
+	}
+	defer gzipReader.Close()
+
+	// Каждая строка в базе фильмов - это JSON объект с краткой информацией о фильме.
+	// Извлекаем этот объект и отправляем фильм в канал movieID, если нужно.
+	scanner := bufio.NewScanner(gzipReader)
 	for scanner.Scan() {
 		movieRaw := scanner.Text()
 		var movie movieBrief
@@ -277,38 +327,15 @@ mainLoop:
 			continue
 		}
 
-		var complete, failsNum int64
-	dbBusyLoop:
-		for {
-			err = fetchResultStmt.QueryRow(movie.TMDBID).Scan(&complete, &failsNum)
-			switch err {
-			case nil:
-				fallthrough
-
-			case sqlite.ErrNoRows:
-				break dbBusyLoop
-
-			case sqlite.ErrBusy:
-				fallthrough
-
-			case sqlite.ErrLocked:
-				journal.Error(goID, " ", err, ", sleeping for 1 sec")
-				time.Sleep(time.Second)
-
-			default:
-				journal.Error(goID, " ", err)
-				continue mainLoop
-			}
-		}
-
-		if complete == 1 {
-			journal.Trace(goID, " movie [", movie.TMDBID, "] fetch is complete, skip")
-			continue
-		} else if failsNum >= movieFetchMaxFails {
-			journal.Info(goID, " movie [", movie.TMDBID, "] has too many fetch fails, skip")
+		finished, err := movieFetchFinished(fetchResultStmt, movie.TMDBID, goID)
+		if err != nil {
+			journal.Error(goID, " ", err)
 			continue
 		}
-		movieID <- movie.TMDBID
+
+		if !finished {
+			movieID <- movie.TMDBID
+		}
 	}
 	err = scanner.Err()
 	if err != nil {
@@ -383,12 +410,12 @@ func tmdbCrawler(goID string, wg *sync.WaitGroup, client *themoviedb.Client, dbN
 	defer movieFetchFailStmt.Close()
 	journal.Trace(goID, " movie fetch fail query prepared")
 
-	movieFetchSuccessStmt, err := conn.Prepare(movieFetchSuccessQuery)
+	movieFetchCompleteStmt, err := conn.Prepare(movieFetchCompleteQuery)
 	if err != nil {
 		journal.Fatal(goID, " ", err)
 		return
 	}
-	defer movieFetchSuccessStmt.Close()
+	defer movieFetchCompleteStmt.Close()
 	journal.Trace(goID, " movie fetch success query prepared")
 
 	rateLimitStr := strconv.Itoa(int(themoviedb.APIRateLimitDur.Seconds()))
@@ -570,9 +597,11 @@ mainLoop:
 			_, okRu := inDBPosters[iso6391.Ru]
 			movieComplete := okEn && okRu // Все данные о фильме получены.
 
-			// Фиксируем, что все данные фильма получены.
-			if movieComplete || !movieHighRanked {
-				_, err = movieFetchSuccessStmt.Exec(tmdbID)
+			// Фиксируем, что работа с фильмом завершена.
+			// Для низкорейтингового фильма ждём примерно месяц с момента его
+			// релиза пока он не станет высокорейтинговым.
+			if movieComplete || !movieHighRanked && time.Since(movie.ReleaseDate) > time.Hour*24*30 {
+				_, err = movieFetchCompleteStmt.Exec(tmdbID)
 				if err != nil {
 					journal.Error(goID, " ", err)
 					continue
@@ -594,6 +623,42 @@ mainLoop:
 			journal.Error(goID, " ", err)
 		}
 	}
+}
+
+// movieFetchFinished выясняет закончена ли работа с фильмом.
+func movieFetchFinished(movieFetchResultStmt *sqlite.Stmt, tmdbID int, goID string) (bool, error) {
+	var complete, failsNum int64
+dbBusyLoop:
+	for {
+		err := movieFetchResultStmt.QueryRow(tmdbID).Scan(&complete, &failsNum)
+		switch err {
+		case nil:
+			fallthrough
+
+		case sqlite.ErrNoRows:
+			break dbBusyLoop
+
+		case sqlite.ErrBusy:
+			fallthrough
+
+		case sqlite.ErrLocked:
+			journal.Error(goID, " ", err, ", sleeping for 1 sec")
+			time.Sleep(time.Second)
+
+		default:
+			return false, err
+		}
+	}
+
+	if complete == 1 {
+		journal.Trace(goID, " movie [", tmdbID, "] fetch is complete, skip")
+		return true, nil
+	} else if failsNum >= movieFetchMaxFails {
+		journal.Info(goID, " movie [", tmdbID, "] has too many fetch fails, skip")
+		return true, nil
+	}
+
+	return false, nil
 }
 
 // findInDBPosters находит языки, для которых постеры есть в БД.
