@@ -47,5 +47,4 @@ func readConfig(cfgFilename string) (*config, error) {
 
 	journal.Info("config file read OK")
 	return &cfg, nil
-
 }
