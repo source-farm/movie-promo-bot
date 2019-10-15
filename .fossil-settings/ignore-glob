@@ -1,6 +1,8 @@
 .directory
 *.db
 *.a
+*.key
+*.pem
 bot
 config.json
 themoviedb/key.txt

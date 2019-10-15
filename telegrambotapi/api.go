@@ -1,20 +1,13 @@
 package telegrambotapi
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"io/ioutil"
+	"mime/multipart"
 	"net/http"
 )
-
-// telegramResponse - это общий вид любого ответа, который возвращает
-// Telegram Bot API. Само сообщение хранится в Result, если OK равен true.
-type telegramResponse struct {
-	OK          bool            `json:"ok"`
-	Result      json.RawMessage `json:"result"`
-	Description string          `json:"description"`
-	ErrorCode   int             `json:"error_code"`
-}
 
 // Client используется для выполнения запросов к Telegram Bot API.
 type Client struct {
@@ -41,11 +34,98 @@ func NewClient(token, addr string, httpClient *http.Client) *Client {
 // GetMe реализует метод getMe Telegram Bot API.
 // https://core.telegram.org/bots/api#getme
 func (c *Client) GetMe() (*User, error) {
-	resp, err := c.httpClient.Get(c.apiBaseURL + "/getMe")
+	tlgrmResp, err := c.get("/getMe")
+	if err != nil {
+		return nil, err
+	}
+
+	var user User
+	err = json.Unmarshal(tlgrmResp.Result, &user)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+// GetWebhookInfo реализует метод getWebhookInfo Telegram Bot API.
+// https://core.telegram.org/bots/api#getwebhookinfo
+func (c *Client) GetWebhookInfo() (*WebhookInfo, error) {
+	tlgrmResp, err := c.get("/getWebhookInfo")
+	if err != nil {
+		return nil, err
+	}
+
+	var webhookInfo WebhookInfo
+	err = json.Unmarshal(tlgrmResp.Result, &webhookInfo)
+	if err != nil {
+		return nil, err
+	}
+	return &webhookInfo, nil
+}
+
+// SetWebhook реализует метод SetWebhook Telegram Bot API.
+// https://core.telegram.org/bots/api#setwebhook
+// TODO: реализованы только параметры url и certificate. Добавить остальные.
+func (c *Client) SetWebhook(url string, certificate []byte) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+
+	// Параметр url.
+	fw, err := mw.CreateFormField("url")
+	if err != nil {
+		return err
+	}
+	_, err = fw.Write([]byte(url))
+	if err != nil {
+		return err
+	}
+
+	// Параметр certificate.
+	fw, err = mw.CreateFormFile("certificate", "public.pem")
+	_, err = fw.Write(certificate)
+	if err != nil {
+		return err
+	}
+
+	mw.Close()
+
+	resp, err := c.httpClient.Post(c.apiBaseURL+"/setWebhook", mw.FormDataContentType(), &buf)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("telegrambotapi: " + resp.Status)
+	}
+
+	return nil
+}
+
+// DeleteWebhook реализует метод deleteWebhook Telegram Bot API.
+// https://core.telegram.org/bots/api#deletewebhook
+func (c *Client) DeleteWebhook() error {
+	resp, err := c.httpClient.Post(c.apiBaseURL+"/deleteWebhook", "", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("telegrambotapi: " + resp.Status)
+	}
+
+	return nil
+}
+
+// get выполняет GET запросы к Telegram Bot API.
+func (c *Client) get(path string) (*telegramResponse, error) {
+	resp, err := c.httpClient.Get(c.apiBaseURL + path)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
 	if resp.StatusCode != http.StatusOK {
 		return nil, errors.New("telegrambotapi: " + resp.Status)
 	}
@@ -63,11 +143,5 @@ func (c *Client) GetMe() (*User, error) {
 	if !tlgrmResp.OK {
 		return nil, errors.New("telegrambotapi: " + tlgrmResp.Description)
 	}
-
-	var user User
-	err = json.Unmarshal(tlgrmResp.Result, &user)
-	if err != nil {
-		return nil, err
-	}
-	return &user, nil
+	return &tlgrmResp, nil
 }
