@@ -56,6 +56,7 @@ func TestSetWebhook(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer f.Close()
 	cert, err := ioutil.ReadAll(f)
 	if err != nil {
 		t.Fatal(err)

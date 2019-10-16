@@ -7,12 +7,6 @@ import (
 	"os"
 )
 
-type config struct {
-	TheMovieDBKey string `json:"themoviedb_key"`
-	TelegramToken string `json:"telegram_token"`
-	DBName        string `json:"db_name"`
-}
-
 func main() {
 	journal.Info("application started")
 
@@ -21,10 +15,28 @@ func main() {
 		journal.Fatal(err)
 	}
 
-	// Горутина для пополнения БД фильмами.
-	journal.Info("starting movies fetch goroutine")
+	// Горутина для пополнения БД фильмами по The MovieDB API (api.themoviedb.org).
 	go theMovieDBHarvester(cfg.TheMovieDBKey, cfg.DBName)
+
+	// Горутина бота - взаимодействие по Telegram Bot API с пользователями Telegram.
+	go bot(&cfg.Bot, cfg.DBName)
+
 	select {}
+}
+
+type botConfig struct {
+	Token       string `json:"telegram_token"`
+	WebhookAddr string `json:"webhook_address"`
+	WebhookPort int    `json:"webhook_port"`
+	BotAPIAddr  string `json:"telegram_bot_api_address"`
+	PublicCert  string `json:"public_cert"`
+	PrivateKey  string `json:"private_key"`
+}
+
+type config struct {
+	TheMovieDBKey string    `json:"themoviedb_key"`
+	DBName        string    `json:"db_name"`
+	Bot           botConfig `json:"bot_config"`
 }
 
 func readConfig(cfgFilename string) (*config, error) {

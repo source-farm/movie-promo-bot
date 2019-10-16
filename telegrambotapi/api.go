@@ -16,14 +16,14 @@ type Client struct {
 	apiBaseURL string
 }
 
-// NewClient возвращает новый Telegram Bot API клиент. addr может содержать
-// порт в конце адреса, который указывается через знак ":". Если httpClient
-// равен nil, то client будет пользоваться http.DefaultClient'ом.
-func NewClient(token, addr string, httpClient *http.Client) *Client {
+// NewClient возвращает новый Telegram Bot API клиент. botAPIAddr может
+// содержать порт в конце адреса, который указывается через ":". Если
+// httpClient равен nil, то client будет пользоваться http.DefaultClient'ом.
+func NewClient(token, botAPIAddr string, httpClient *http.Client) *Client {
 	client := Client{
 		token:      token,
 		httpClient: httpClient,
-		apiBaseURL: "https://" + addr + "/bot" + token,
+		apiBaseURL: "https://" + botAPIAddr + "/bot" + token,
 	}
 	if client.httpClient == nil {
 		client.httpClient = http.DefaultClient
