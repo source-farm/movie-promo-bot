@@ -344,50 +344,48 @@ func TestFilter(t *testing.T) {
 		t.Fatal("decode error")
 	}
 
-	/*
-		// Проверка фильтрации массива строк на первом уровне вложенности.
-		type Dict struct {
-			Author string
-			Words  []string
+	// Проверка фильтрации массива строк на первом уровне вложенности.
+	type Dict struct {
+		Author string
+		Words  []string
+	}
+	dict := Dict{
+		Author: "Mr. Claydon",
+		Words:  []string{"fly", "home", "freeze", "ace", "zero"},
+	}
+	testJSON, err = json.Marshal(dict)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filter = func(v interface{}) bool {
+		word, ok := v.(string)
+		if !ok {
+			return false
 		}
-		dict := Dict{
-			Author: "Mr. Claydon",
-			Words:  []string{"fly", "home", "freeze", "ace", "zero"},
+		return len(word) <= 4
+	}
+	var wordsFiltered []string
+	for _, word := range dict.Words {
+		if filter(word) {
+			wordsFiltered = append(wordsFiltered, word)
 		}
-		testJSON, err = json.Marshal(dict)
-		if err != nil {
-			t.Fatal(err)
-		}
-		filter = func(v interface{}) bool {
-			word, ok := v.(string)
-			if !ok {
-				return false
-			}
-			return len(word) <= 4
-		}
-		var wordsFiltered []string
-		for _, word := range dict.Words {
-			if filter(word) {
-				wordsFiltered = append(wordsFiltered, word)
-			}
-		}
-		scanner.Reset()
-		var wordsDecoded []string
-		scanner.SearchFor(&wordsDecoded, "Words")
-		err = scanner.SetFilter(filter, "Words")
-		if err != nil {
-			t.Fatal(err)
-		}
-		err = scanner.Find(bytes.NewReader(testJSON))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !reflect.DeepEqual(wordsFiltered, wordsDecoded) {
-			t.Fatal("decode error")
-		}
-	*/
+	}
+	scanner.Reset()
+	var wordsDecoded []string
+	scanner.SearchFor(&wordsDecoded, "Words")
+	err = scanner.SetFilter(filter, "Words")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = scanner.Find(bytes.NewReader(testJSON))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(wordsFiltered, wordsDecoded) {
+		t.Fatal("decode error")
+	}
 
-	// Проверка фильтрации массива объектов на первом уровне вложенности.
+	// Проверка фильтрации массива, когда JSON является целиком массивом.
 	type HourTemp struct {
 		Hour int
 		Temp float64
