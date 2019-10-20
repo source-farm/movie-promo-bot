@@ -33,3 +33,32 @@ type WebhookInfo struct {
 	MaxConnections       int      `json:"max_connections"`
 	AllowedUpdates       []string `json:"allowed_updates"`
 }
+
+// Chat - Telegram чат.
+// https://core.telegram.org/bots/api#chat
+// TODO: добавить остальные параметры.
+type Chat struct {
+	ID        int64  `json:"id"`
+	Type      string `json:"type"`
+	FirstName string `json:"first_name"`
+	LastName  string `json:"last_name"`
+}
+
+// Message - сообщение Telegram.
+// https://core.telegram.org/bots/api#message
+// TODO: добавить остальные параметры.
+type Message struct {
+	ID   int    `json:"message_id"`
+	From User   `json:"from"`
+	Date int    `json:"date"`
+	Chat Chat   `json:"chat"`
+	Text string `json:"text"`
+}
+
+// Update - новое сообщение от Telegram.
+// https://core.telegram.org/bots/api#update
+// TODO: добавить остальные параметры.
+type Update struct {
+	ID      int     `json:"update_id"`
+	Message Message `json:"message"`
+}
