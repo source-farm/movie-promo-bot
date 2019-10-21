@@ -6,6 +6,16 @@ package sqlite
 /*
 #include <stdlib.h>
 #include "sqlite3.h"
+
+// Тип void_func определяется лишь для того, чтобы преобразовать к нему функцию
+// sqlite3_spellfix_init перед её передачей в sqlite3_auto_extension.
+// См. определение функции NewConn, а также
+// https://golang.org/cmd/cgo/#hdr-Go_references_to_C
+typedef void (*void_func) ();
+
+// Объявляем функцию вручную, т.к. расширение spellfix - это один файл spellfix.c
+// без заголовочного файла. Без этого объявления возникает ошибка компиляции.
+extern int sqlite3_spellfix_init(sqlite3 *db, char **pzErrMsg, const sqlite3_api_routines *pApi);
 */
 import "C"
 import (
@@ -14,6 +24,31 @@ import (
 	"reflect"
 	"strconv"
 	"unsafe"
+)
+
+const (
+	// Запрос для настройки своей таблицы стоимостей операций вставки, удаления
+	// и замены при вызове SQL функции editdist3 из расширения spellfix.
+	// Подробнее можно прочитать здесь
+	// https://sqlite.org/spellfix1.html#the_editdist3_cost_table
+	cfgEditCostQuery = `
+CREATE TABLE IF NOT EXISTS editcost(
+    iLang INT,
+    cFrom TEXT,
+    cTo   TEXT,
+    iCost INT,
+          UNIQUE (cFrom, cTo)
+);
+
+INSERT OR IGNORE INTO editcost(iLang, cFrom, cTo, iCost)
+VALUES (0, '', '?', 10),   -- Стоимость вставки
+       (0, '?', '', 100),  -- Стоимость удаления
+       (0, '?', '?', 200); -- Стоимость замены
+
+-- Фактическая установка таблицы стоимостей. Подробнее можно прочитать здесь
+-- https://sqlite.org/spellfix1.html#auxiliary_functions
+SELECT editdist3('editcost');
+`
 )
 
 var (
@@ -365,13 +400,30 @@ type Conn struct {
 func NewConn(dbFilename string) (*Conn, error) {
 	dbFilenameCStr := C.CString(dbFilename)
 	defer C.free(unsafe.Pointer(dbFilenameCStr))
-	conn := new(Conn)
-	resCode := C.sqlite3_open(dbFilenameCStr, &conn.db)
+
+	// Устанавливаем автозагрузку расширения spellfix. Побробнее можно прочитать здесь
+	// https://sqlite.org/loadext.html#statically_linking_a_run_time_loadable_extension
+	f := C.void_func(C.sqlite3_spellfix_init)
+	resCode := C.sqlite3_auto_extension(f)
 	err := resultCode2GoError(resCode)
+	if err != nil {
+		return nil, err
+	}
+
+	conn := new(Conn)
+	resCode = C.sqlite3_open(dbFilenameCStr, &conn.db)
+	err = resultCode2GoError(resCode)
 	if err != nil {
 		C.sqlite3_close(conn.db)
 		return nil, err
 	}
+
+	_, err = conn.Exec(cfgEditCostQuery)
+	if err != nil {
+		C.sqlite3_close(conn.db)
+		return nil, err
+	}
+
 	return conn, nil
 }
 
