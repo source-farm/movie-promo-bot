@@ -76,6 +76,7 @@ type movieBrief struct {
 }
 
 // Инициализация БД фильмов.
+// TODO: перенести в main.
 func initDB(goID, dbName string) {
 	journal.Info(goID, " initialising database "+dbName)
 

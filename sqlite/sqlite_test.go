@@ -269,52 +269,6 @@ func TestRowScan(t *testing.T) {
 	}
 }
 
-func TestEditDist3(t *testing.T) {
-	defer cleanup()
-
-	conn, err := NewConn(dbName)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Close()
-
-	_, err = conn.Exec("CREATE TABLE test(animal TEXT);")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Заполняем таблицу данными.
-	insertStmt, err := conn.Prepare(`
-INSERT INTO test(animal)
-VALUES ('lion'),
-       ('giraffe'),
-       ('elephant'),
-       ('bear'),
-       ('rabbit'),
-       ('alligator');`)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer insertStmt.Close()
-
-	selectStmt, err := conn.Prepare(`
-SELECT animal
-  FROM test
- WHERE editdist3('rabit', animal) < 100;`)
-
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer selectStmt.Close()
-
-	rows, err := selectStmt.Query()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-}
-
 func cleanup() {
 	_, err := os.Stat(dbName)
 	if err == nil {
