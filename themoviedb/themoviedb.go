@@ -91,6 +91,13 @@ type Poster struct {
 	VoteAverage float64          `json:"vote_average"`
 }
 
+// MovieCollection описывает коллекцию фильма - так группируются разные части
+// одного фильма.
+type MovieCollection struct {
+	ID   int    `json:"id"`
+	Name string `json:"name"`
+}
+
 // Movie - это информация об одном фильме.
 type Movie struct {
 	TMDBID        int                         `json:"id"`
@@ -101,6 +108,7 @@ type Movie struct {
 	ReleaseDate   time.Time                   `json:"-"`
 	VoteCount     int                         `json:"vote_count"`
 	VoteAverage   float64                     `json:"vote_average"`
+	Collection    MovieCollection             `json:"belongs_to_collection"`
 	Title         map[iso6391.LangCode]string `json:"-"`
 	Poster        map[iso6391.LangCode]Poster `json:"-"`
 }
@@ -277,6 +285,7 @@ func (c *Client) GetMovie(id int) (Movie, error) {
 	scanner.SearchFor(&releaseDateStr, "release_date")
 	scanner.SearchFor(&movie.VoteAverage, "vote_average")
 	scanner.SearchFor(&movie.VoteCount, "vote_count")
+	scanner.SearchFor(&movie.Collection, "belongs_to_collection")
 	//- Названия фильма на различных языках.
 	var translations []translation
 	scanner.SearchFor(&translations, "translations", "translations")

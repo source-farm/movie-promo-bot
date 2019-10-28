@@ -29,8 +29,8 @@ const (
 	httpReqTimeout     = time.Second * 15
 
 	movieInsertQuery = `
-INSERT INTO movie (tmdb_id, original_title, original_lang, released_on, adult, imdb_id, vote_count, vote_average)
-VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+INSERT INTO movie (tmdb_id, original_title, original_lang, released_on, adult, imdb_id, vote_count, vote_average, collection_id)
+VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
 ON CONFLICT (tmdb_id) DO NOTHING;
 `
 
@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS movie (
     imdb_id        INTEGER,
     vote_count     INTEGER,
     vote_average   REAL,
+	collection_id  INTEGER, -- Если равен 0, то фильм не принадлежит никакой коллекции.
     created_on     TEXT DEFAULT (datetime('now')),
     updated_on     TEXT
 );
@@ -561,7 +562,8 @@ mainLoop:
 				movie.Adult,
 				movie.IMDBID,
 				movie.VoteCount,
-				movie.VoteAverage)
+				movie.VoteAverage,
+				movie.Collection.ID)
 			if err != nil {
 				goto DBError
 			}
