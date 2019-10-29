@@ -99,7 +99,7 @@ CREATE TABLE IF NOT EXISTS movie (
     imdb_id        INTEGER,
     vote_count     INTEGER,
     vote_average   REAL,
-	collection_id  INTEGER, -- Если равен 0, то фильм не принадлежит никакой коллекции.
+    collection_id  INTEGER, -- Если равен 0, то фильм не принадлежит никакой коллекции.
     created_on     TEXT DEFAULT (datetime('now')),
     updated_on     TEXT
 );

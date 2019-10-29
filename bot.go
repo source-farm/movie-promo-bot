@@ -13,17 +13,20 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// Краткая информация о названии фильма.
+// Краткая информация о фильме.
 type titleInfo struct {
-	id            int64  // Значение поля id в таблице movie_detail.
-	titleOriginal string // Название фильма.
-	titleLower    string // Название фильма в нижнем регистре.
-	editcost      int    // Стоимость приведения какого-либо фильма к title. Чем меньше, тем лучше.
+	id            int64     // Значение поля id в таблице movie_detail.
+	titleOriginal string    // Название фильма.
+	titleLower    string    // Название фильма в нижнем регистре.
+	releaseDate   time.Time // Время выхода фильма в кинотеатрах.
+	collectionID  int64     // Разные части одного фильма принадлежат одной колеекции.
+	editcost      int       // Стоимость приведения какого-либо фильма к title. Чем меньше, тем лучше.
 }
 
 // Max-куча из значений типа titleInfo.
@@ -49,25 +52,25 @@ const (
 	// Таймаут выполнения запроса к БД.
 	dbQueryTimeoutMS = 10000
 
-	// Извлечения постера и даты выхода фильма по id фильма в таблице movie_detail.
+	// Извлечения постера фильма по его id в таблице movie_detail.
 	posterQuery = `
-   SELECT movie_detail.poster, movie.released_on
-     FROM movie_detail
-LEFT JOIN movie ON movie_detail.fk_movie_id = movie.id
-    WHERE movie_detail.id = ?1;
+SELECT poster
+  FROM movie_detail
+ WHERE id = ?1;
 `
 
-	// Получение названий фильмов.
+	// Извлечение фильмов выше определённого id.
 	titlesQuery = `
-  SELECT id, title
-    FROM movie_detail
-   WHERE id > ?1
-ORDER BY id;
+   SELECT movie_detail.id, movie_detail.title, movie.released_on, movie.collection_id
+     FROM movie_detail
+LEFT JOIN movie ON movie_detail.fk_movie_id = movie.id
+    WHERE movie_detail.id > ?1
+ ORDER BY movie_detail.id;
 `
 
 	// Стоимости операций для алгоритма Левенштейна.
 	levInsCost = 1   // Вставка символа.
-	levDelCost = 5   // Удаление символа.
+	levDelCost = 7   // Удаление символа.
 	levSubCost = 100 // Замена символа.
 )
 
@@ -275,15 +278,25 @@ func loadTitles(titles *[]titleInfo, titlesQuery *sqlite.Stmt) error {
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var id int64
-		var title string
-		err = rows.Scan(&id, &title)
+		var id, collectionID int64
+		var title, releaseDateStr string
+		err = rows.Scan(&id, &title, &releaseDateStr, &collectionID)
 		if err != nil {
 			return err
 		}
-		// Переводим фильмы в нижний регистр для улучшения поиска по ним (см.
-		// getBestMatchTitles).
-		*titles = append(*titles, titleInfo{id: id, titleOriginal: title, titleLower: strings.ToLower(title)})
+		releaseDate, err := time.Parse("2006-01-02", releaseDateStr)
+		if err != nil {
+			journal.Error(err)
+			releaseDate = time.Time{}
+		}
+		t := titleInfo{
+			id:            id,
+			titleOriginal: title,
+			titleLower:    strings.ToLower(title), // Используется в getBestMatchTitles.
+			releaseDate:   releaseDate,
+			collectionID:  collectionID,
+		}
+		*titles = append(*titles, t)
 	}
 	if rows.Err() != nil {
 		return err
@@ -296,44 +309,99 @@ func loadTitles(titles *[]titleInfo, titlesQuery *sqlite.Stmt) error {
 // фильмов в titles. Наиболее близкие будут находиться в начале возвращаемого
 // слайса.
 func getBestMatchTitles(title string, titles []titleInfo) []titleInfo {
-	source := strings.ToLower(strings.TrimSpace(title))
-	if source == "" || len(titles) == 0 {
+	titleLower := strings.ToLower(strings.TrimSpace(title))
+	if titleLower == "" || len(titles) == 0 {
 		return nil
 	}
 
 	var titlesHeap titleInfoHeap
 	heap.Init(&titlesHeap)
 
+	// Находим 10 самых близких к фильму title фильмов по расстоянию Левенштейна.
 	for i := range titles {
-		levDist := levenshtein.Distance(source, titles[i].titleLower, levInsCost, levDelCost, levSubCost)
+		levDist := levenshtein.Distance(titleLower, titles[i].titleLower, levInsCost, levDelCost, levSubCost)
 		titleInfo := titles[i]
 		titleInfo.editcost = levDist
 		heap.Push(&titlesHeap, titleInfo)
-		if titlesHeap.Len() > 5 { // Отбираем 5 самых близких к source фильмов.
+		if titlesHeap.Len() > 10 {
 			heap.Pop(&titlesHeap)
 		}
 	}
 
-	// titlesRanked содержит названия фильмов в порядке возрастания расстояния
-	// Левенштейна, т.е. самые близкие к title фильмы находятся в начале
-	// слайса.
-	titlesRanked := make([]titleInfo, titlesHeap.Len())
-	for i := len(titlesRanked) - 1; i >= 0; i-- {
-		titlesRanked[i] = heap.Pop(&titlesHeap).(titleInfo)
+	// titlesLevRanked должен содержать фильмы в порядке возрастания расстояния
+	// Левенштейна, т.е. самые близкие к title фильмы находятся в его начале.
+	titlesLevRanked := make([]titleInfo, titlesHeap.Len())
+	for i := len(titlesLevRanked) - 1; i >= 0; i-- {
+		titlesLevRanked[i] = heap.Pop(&titlesHeap).(titleInfo)
 	}
 
-	// Перемещаем в начало списка те фильмы, в названии которых есть текст,
-	// по-которому мы искали фильмы (source).  Это делается для того, чтобы
-	// разные части одного фильма оказались сгруппированы рядом.
-	for i := range titlesRanked {
-		if strings.Index(titlesRanked[i].titleLower, source) != -1 {
-			for j := i; j > 0; j-- {
-				if strings.Index(titlesRanked[j-1].titleLower, source) == -1 {
-					titlesRanked[j-1], titlesRanked[j] = titlesRanked[j], titlesRanked[j-1]
-				} else {
-					break
+	// Если в начале titlesLevRanked содержит фильмы с одинаковыми названиями, то
+	// более выше ставим более позднее снятый фильм. Примером такого фильма
+	// является Lion King, который был снят в 1994 и 2019, т.е. выше в списке
+	// должен быть фильм 2019 года.
+	for i := 1; i < len(titlesLevRanked); i++ {
+		if titlesLevRanked[i].titleLower != titlesLevRanked[0].titleLower {
+			break
+		}
+		for j := i; j > 0; j-- {
+			if titlesLevRanked[j].releaseDate.After(titlesLevRanked[j-1].releaseDate) {
+				titlesLevRanked[j-1], titlesLevRanked[j] = titlesLevRanked[j], titlesLevRanked[j-1]
+			} else {
+				break
+			}
+		}
+	}
+
+	if len(titlesLevRanked) <= 3 {
+		return titlesLevRanked
+	}
+
+	//- Формируем окончательный список фильмов.
+	//- Сначала должен идти фильм, который по расстоянию Левенштейна оказался на
+	//- первом месте. После него должны идти другие части этого фильма,
+	//- упорядоченные по дате релиза.
+	titlesRanked := []titleInfo{titlesLevRanked[0]}
+	if titlesLevRanked[0].collectionID != 0 {
+		for _, title := range titlesLevRanked[1:] {
+			if title.collectionID == titlesLevRanked[0].collectionID {
+				titlesRanked = append(titlesRanked, title)
+			}
+		}
+
+		if len(titlesRanked) > 1 {
+			topTitleOtherParts := titlesRanked[1:]
+			sort.Slice(topTitleOtherParts, func(i, j int) bool {
+				return topTitleOtherParts[i].releaseDate.Before(topTitleOtherParts[j].releaseDate)
+			})
+		}
+	}
+
+	//- Далее должна идти все части фильма, который оказался на втором месте по
+	//- расстоянию Левенштейна, упорядоченные по дате релиза по возрастанию.
+	if titlesLevRanked[1].collectionID != titlesLevRanked[0].collectionID || titlesLevRanked[1].collectionID == 0 {
+		topRankedCollectionLen := len(titlesRanked)
+		titlesRanked = append(titlesRanked, titlesLevRanked[1])
+		if titlesLevRanked[1].collectionID != 0 {
+			for _, title := range titlesLevRanked[2:] {
+				if title.collectionID == titlesLevRanked[1].collectionID {
+					titlesRanked = append(titlesRanked, title)
 				}
 			}
+		}
+
+		if len(titlesRanked) > topRankedCollectionLen {
+			secondRankedCollection := titlesRanked[topRankedCollectionLen:]
+			sort.Slice(secondRankedCollection, func(i, j int) bool {
+				return secondRankedCollection[i].releaseDate.Before(secondRankedCollection[j].releaseDate)
+			})
+		}
+	}
+
+	//- В конце идут остальные фильмы.
+	for _, title := range titlesLevRanked[2:] {
+		if title.collectionID == 0 ||
+			title.collectionID != titlesLevRanked[0].collectionID && title.collectionID != titlesLevRanked[1].collectionID {
+			titlesRanked = append(titlesRanked, title)
 		}
 	}
 
