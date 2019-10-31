@@ -62,3 +62,16 @@ type Update struct {
 	ID      int     `json:"update_id"`
 	Message Message `json:"message"`
 }
+
+// InlineKeyboardMarkup - inline клавиатура.
+// https://core.telegram.org/bots/api#inlinekeyboardmarkup
+type InlineKeyboardMarkup struct {
+	InlineKeyboard [][]InlineKeyboardButton `json:"inline_keyboard"`
+}
+
+// InlineKeyboardButton - кнопка inline клавиатуры.
+// https://core.telegram.org/bots/api#inlinekeyboardbutton
+type InlineKeyboardButton struct {
+	Text         string `json:"text"`
+	CallbackData string `json:"callback_data"`
+}

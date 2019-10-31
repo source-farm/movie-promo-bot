@@ -72,6 +72,10 @@ LEFT JOIN movie ON movie_detail.fk_movie_id = movie.id
 	levInsCost = 1   // Вставка символа.
 	levDelCost = 7   // Удаление символа.
 	levSubCost = 100 // Замена символа.
+
+	// Макс. количество вариантов постеров, которые отправляются в ответ на
+	// запрос Telegram клиента.
+	maxResultsInResponse = 3
 )
 
 var (
@@ -181,22 +185,16 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	match := getBestMatchTitles(update.Message.Text, movieTitles)
-	if len(match) == 0 {
+	titles := getBestMatchTitles(update.Message.Text, movieTitles)
+	if len(titles) == 0 {
 		journal.Info("No match")
 		return
 	}
 	var poster []byte
-	var releaseDateStr string
-	err = posterStmt.QueryRow(match[0].id).Scan(&poster, &releaseDateStr)
+	err = posterStmt.QueryRow(titles[0].id).Scan(&poster)
 	if err != nil {
 		journal.Error(err)
 		return
-	}
-	releaseDate, err := time.Parse("2006-01-02", releaseDateStr)
-	if err != nil {
-		journal.Error(err)
-		releaseDate = time.Time{}
 	}
 
 	var buf bytes.Buffer
@@ -243,11 +241,46 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 		journal.Error(err)
 		return
 	}
-	posterCaption := match[0].titleOriginal
-	if !releaseDate.IsZero() {
-		posterCaption += " (" + strconv.Itoa(releaseDate.Year()) + ")"
+	posterCaption := titles[0].titleOriginal
+	if !titles[0].releaseDate.IsZero() {
+		posterCaption += " (" + strconv.Itoa(titles[0].releaseDate.Year()) + ")"
 	}
 	_, err = fw.Write([]byte(posterCaption))
+	if err != nil {
+		journal.Error(err)
+		return
+	}
+
+	// Параметр reply_markup.
+	fw, err = mw.CreateFormField("reply_markup")
+	if err != nil {
+		journal.Error(err)
+		return
+	}
+	keyboard := telegrambotapi.InlineKeyboardMarkup{InlineKeyboard: [][]telegrambotapi.InlineKeyboardButton{}}
+	buttons := []telegrambotapi.InlineKeyboardButton{}
+	for i := range titles {
+		buttonText := strconv.Itoa(i + 1)
+		if i == 0 {
+			buttonText = "- " + strconv.Itoa(i+1) + " -"
+		}
+		buttons = append(buttons, telegrambotapi.InlineKeyboardButton{
+			Text: buttonText,
+			// CallbackData - это данные, которые будут отправлены боту обратно, когда пользователь нажмёт
+			// на соответствующую кнопку. Здесь мы устанавливаем её равной id фильма в таблице movie_detail.
+			CallbackData: strconv.FormatInt(titles[i].id, 10),
+		})
+		if (i + 1) >= maxResultsInResponse {
+			break
+		}
+	}
+	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, buttons)
+	keyboardJSON, err := json.Marshal(keyboard)
+	if err != nil {
+		journal.Error(err)
+		return
+	}
+	_, err = fw.Write(keyboardJSON)
 	if err != nil {
 		journal.Error(err)
 		return
@@ -376,7 +409,7 @@ func getBestMatchTitles(title string, titles []titleInfo) []titleInfo {
 		}
 	}
 
-	//- Далее должна идти все части фильма, который оказался на втором месте по
+	//- Далее должны идти все части фильма, который оказался на втором месте по
 	//- расстоянию Левенштейна, упорядоченные по дате релиза по возрастанию.
 	if titlesLevRanked[1].collectionID != titlesLevRanked[0].collectionID || titlesLevRanked[1].collectionID == 0 {
 		topRankedCollectionLen := len(titlesRanked)
