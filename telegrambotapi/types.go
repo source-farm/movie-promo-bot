@@ -48,19 +48,21 @@ type Chat struct {
 // https://core.telegram.org/bots/api#message
 // TODO: добавить остальные параметры.
 type Message struct {
-	ID   int    `json:"message_id"`
-	From User   `json:"from"`
-	Date int    `json:"date"`
-	Chat Chat   `json:"chat"`
-	Text string `json:"text"`
+	ID          int                  `json:"message_id"`
+	From        User                 `json:"from"`
+	Date        int                  `json:"date"`
+	Chat        Chat                 `json:"chat"`
+	Text        string               `json:"text"`
+	ReplyMarkup InlineKeyboardMarkup `json:"reply_markup"`
 }
 
 // Update - новое сообщение от Telegram.
 // https://core.telegram.org/bots/api#update
 // TODO: добавить остальные параметры.
 type Update struct {
-	ID      int     `json:"update_id"`
-	Message Message `json:"message"`
+	ID            int           `json:"update_id"`
+	Message       Message       `json:"message"`
+	CallbackQuery CallbackQuery `json:"callback_query"`
 }
 
 // InlineKeyboardMarkup - inline клавиатура.
@@ -71,7 +73,20 @@ type InlineKeyboardMarkup struct {
 
 // InlineKeyboardButton - кнопка inline клавиатуры.
 // https://core.telegram.org/bots/api#inlinekeyboardbutton
+// TODO: добавить остальные параметры.
 type InlineKeyboardButton struct {
 	Text         string `json:"text"`
 	CallbackData string `json:"callback_data"`
+}
+
+// CallbackQuery - сообщение, которое получает бот при нажатии пользователем
+// кнопки inline клавиатуры.
+// https://core.telegram.org/bots/api#callbackquery
+// TODO: добавить остальные параметры.
+type CallbackQuery struct {
+	ID           string  `json:"id"`
+	From         User    `json:"from"`
+	Message      Message `json:"message"`
+	ChatInstance string  `json:"chat_instance"`
+	Data         string  `json:"data"`
 }

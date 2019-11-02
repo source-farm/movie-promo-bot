@@ -65,7 +65,7 @@ func (c *Client) GetWebhookInfo() (*WebhookInfo, error) {
 
 // SetWebhook реализует метод SetWebhook Telegram Bot API.
 // https://core.telegram.org/bots/api#setwebhook
-// TODO: реализованы только параметры url и certificate. Добавить остальные.
+// TODO: добавить недостающие параметры.
 func (c *Client) SetWebhook(url string, certificate []byte) error {
 	var buf bytes.Buffer
 	mw := multipart.NewWriter(&buf)
@@ -106,6 +106,38 @@ func (c *Client) SetWebhook(url string, certificate []byte) error {
 // https://core.telegram.org/bots/api#deletewebhook
 func (c *Client) DeleteWebhook() error {
 	resp, err := c.httpClient.Post(c.apiBaseURL+"/deleteWebhook", "", nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("telegrambotapi: " + resp.Status)
+	}
+
+	return nil
+}
+
+// AnswerCallbackQuery реализует метод AnswerCallbackQuery Telegram Bot API.
+// https://core.telegram.org/bots/api#answercallbackquery
+// TODO: добавить недостающие параметры.
+func (c *Client) AnswerCallbackQuery(callbackQueryID string) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+
+	// Параметр callback_query_id.
+	fw, err := mw.CreateFormField("callback_query_id")
+	if err != nil {
+		return err
+	}
+	_, err = fw.Write([]byte(callbackQueryID))
+	if err != nil {
+		return err
+	}
+
+	mw.Close()
+
+	resp, err := c.httpClient.Post(c.apiBaseURL+"/answerCallbackQuery", mw.FormDataContentType(), &buf)
 	if err != nil {
 		return err
 	}
