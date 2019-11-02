@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"container/heap"
 	"encoding/json"
+	"errors"
 	"io/ioutil"
 	"mime/multipart"
 	"net"
@@ -79,9 +80,12 @@ LEFT JOIN movie ON movie_detail.fk_movie_id = movie.id
 )
 
 var (
-	posterStmt  *sqlite.Stmt
-	titlesStmt  *sqlite.Stmt
-	movieTitles []titleInfo
+	posterStmt *sqlite.Stmt
+	titlesStmt *sqlite.Stmt
+	// Словарь из всех известных боту фильмов. Индексирование идёт по полю id
+	// таблицы movie_detail.
+	titles      map[int64]titleInfo = map[int64]titleInfo{}
+	tlgrmClient *telegrambotapi.Client
 )
 
 // bot общается по Telegram Bot API с пользователями Telegram.
@@ -120,7 +124,7 @@ func bot(cfg *botConfig, dbName string) {
 
 	// Загружаем названия фильмов из БД.
 	journal.Info(goID, " loading movie titles from database")
-	err = loadTitles(&movieTitles, titlesStmt)
+	err = loadTitles(titles, titlesStmt)
 	if err != nil {
 		journal.Fatal(err)
 	}
@@ -130,8 +134,8 @@ func bot(cfg *botConfig, dbName string) {
 	httpClient := &http.Client{
 		Timeout: time.Second * 10,
 	}
-	client := telegrambotapi.NewClient(cfg.Token, cfg.BotAPIAddr, httpClient)
-	webhookInfo, err := client.GetWebhookInfo()
+	tlgrmClient = telegrambotapi.NewClient(cfg.Token, cfg.BotAPIAddr, httpClient)
+	webhookInfo, err := tlgrmClient.GetWebhookInfo()
 	if err != nil {
 		journal.Fatal(goID, " ", err)
 	}
@@ -150,7 +154,7 @@ func bot(cfg *botConfig, dbName string) {
 			journal.Fatal(goID, " ", err)
 		}
 
-		err = client.SetWebhook(webhookURL, cert)
+		err = tlgrmClient.SetWebhook(webhookURL, cert)
 		if err != nil {
 			journal.Fatal(goID, " ", err)
 		}
@@ -169,12 +173,10 @@ func bot(cfg *botConfig, dbName string) {
 
 // Обработчик событий от Telegram.
 func telegramHandler(w http.ResponseWriter, req *http.Request) {
-	// TODO: дополнить обработку ошибок. Там где нужно отправить серверу, что не так.
-	// Сообщить клиенту что-либо адекватное, если фильм не найден.
-
 	body, err := ioutil.ReadAll(req.Body)
 	if err != nil {
 		journal.Error(err)
+		http.Error(w, "Error while reading request", http.StatusInternalServerError)
 		return
 	}
 
@@ -182,127 +184,62 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 	err = json.Unmarshal(body, &update)
 	if err != nil {
 		journal.Error(err)
+		http.Error(w, "Cannot unmarshal update", http.StatusInternalServerError)
 		return
 	}
 
-	titles := getBestMatchTitles(update.Message.Text, movieTitles)
-	if len(titles) == 0 {
-		journal.Info("No match")
-		return
-	}
-	var poster []byte
-	err = posterStmt.QueryRow(titles[0].id).Scan(&poster)
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-
-	var buf bytes.Buffer
-	mw := multipart.NewWriter(&buf)
-
-	// Используем метод sendPhoto из Telegram Bot API для отправки постера.
-	// https://core.telegram.org/bots/api#sendphoto
-
-	// Параметр method.
-	fw, err := mw.CreateFormField("method")
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-	_, err = fw.Write([]byte("sendPhoto"))
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-
-	// Параметр chat_id.
-	fw, err = mw.CreateFormField("chat_id")
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-	_, err = fw.Write([]byte(strconv.FormatInt(update.Message.Chat.ID, 10)))
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-
-	// Параметр photo.
-	fw, err = mw.CreateFormFile("photo", "image")
-	_, err = fw.Write(poster)
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-
-	// Параметр caption.
-	fw, err = mw.CreateFormField("caption")
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-	posterCaption := titles[0].titleOriginal
-	if !titles[0].releaseDate.IsZero() {
-		posterCaption += " (" + strconv.Itoa(titles[0].releaseDate.Year()) + ")"
-	}
-	_, err = fw.Write([]byte(posterCaption))
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-
-	// Параметр reply_markup.
-	fw, err = mw.CreateFormField("reply_markup")
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-	keyboard := telegrambotapi.InlineKeyboardMarkup{InlineKeyboard: [][]telegrambotapi.InlineKeyboardButton{}}
-	buttons := []telegrambotapi.InlineKeyboardButton{}
-	for i := range titles {
-		buttonText := strconv.Itoa(i + 1)
-		if i == 0 {
-			buttonText = "- " + strconv.Itoa(i+1) + " -"
+	switch {
+	// Пришло новое сообщение.
+	case update.Message.ID != 0:
+		sendPhoto, contentType, err := makeSendPhoto(update.Message.Text, update.Message.Chat.ID)
+		if err != nil {
+			journal.Error(err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
 		}
-		buttons = append(buttons, telegrambotapi.InlineKeyboardButton{
-			Text: buttonText,
-			// CallbackData - это данные, которые будут отправлены боту обратно, когда пользователь нажмёт
-			// на соответствующую кнопку. Здесь мы устанавливаем её равной id фильма в таблице movie_detail.
-			CallbackData: strconv.FormatInt(titles[i].id, 10),
-		})
-		if (i + 1) >= maxResultsInResponse {
-			break
+		w.Header().Set("Content-Type", contentType)
+		_, err = w.Write(sendPhoto)
+		if err != nil {
+			journal.Error(err)
+			return
 		}
-	}
-	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, buttons)
-	keyboardJSON, err := json.Marshal(keyboard)
-	if err != nil {
-		journal.Error(err)
-		return
-	}
-	_, err = fw.Write(keyboardJSON)
-	if err != nil {
-		journal.Error(err)
-		return
-	}
 
-	mw.Close()
+	// Пользователь нажал на кнопку ранее отправленного сообщения с inline клавиатурой.
+	case update.CallbackQuery.ID != "":
+		editMessageMedia, contentType, err := makeEditMessageMedia(&update.CallbackQuery)
+		if err != nil {
+			journal.Error(err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", contentType)
+		_, err = w.Write(editMessageMedia)
+		if err != nil {
+			journal.Error(err)
+			return
+		}
 
-	w.Header().Set("Content-Type", mw.FormDataContentType())
-	_, err = w.Write(buf.Bytes())
-	if err != nil {
-		journal.Error(err)
-		return
+		// При нажатии какой-либо кнопки inline клавиатуры необходимо вызывать
+		// метод AnswerCallbackQuery Telegram Bot API, чтобы исчез белый круг
+		// прогресса на кнопке.
+		err = tlgrmClient.AnswerCallbackQuery(update.CallbackQuery.ID)
+		if err != nil {
+			journal.Error(err)
+			return
+		}
 	}
 }
 
-// Загрузка из БД названий фильмов в titles.
-func loadTitles(titles *[]titleInfo, titlesQuery *sqlite.Stmt) error {
+// Загрузка из БД названий фильмов в titles. Повторный вызов функции
+// добавляет к titles новые фильмы, а не извлекает всё заново.
+func loadTitles(titles map[int64]titleInfo, titlesQuery *sqlite.Stmt) error {
 	// В слайсе titles фильмы должны идти по возрастанию поля id.
 	// Находим макс. id, чтобы запросить у БД только новые фильмы.
 	maxID := int64(0)
-	if len(*titles) != 0 {
-		maxID = (*titles)[len(*titles)-1].id
+	for id := range titles {
+		if id > maxID {
+			maxID = id
+		}
 	}
 
 	rows, err := titlesStmt.Query(maxID)
@@ -329,7 +266,7 @@ func loadTitles(titles *[]titleInfo, titlesQuery *sqlite.Stmt) error {
 			releaseDate:   releaseDate,
 			collectionID:  collectionID,
 		}
-		*titles = append(*titles, t)
+		titles[id] = t
 	}
 	if rows.Err() != nil {
 		return err
@@ -338,11 +275,237 @@ func loadTitles(titles *[]titleInfo, titlesQuery *sqlite.Stmt) error {
 	return nil
 }
 
+// makeSendPhoto возвращает сообщение sendPhoto из Telegram Bot API:
+// https://core.telegram.org/bots/api#sendphoto
+// Параметр типа string после сообщения - это значение заголовка Content-Type.
+func makeSendPhoto(userInput string, charID int64) ([]byte, string, error) {
+	bestMatchTitles := getBestMatchTitles(userInput, titles)
+	if len(bestMatchTitles) == 0 {
+		return nil, "", errors.New("No match in movies database")
+	}
+
+	var poster []byte
+	// TODO: posterStmt.QueryRow не является потокобезопасным.
+	err := posterStmt.QueryRow(bestMatchTitles[0].id).Scan(&poster)
+	if err != nil {
+		return nil, "", errors.New("Cannot fetch poster from database")
+	}
+
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+
+	// Параметр method.
+	fw, err := mw.CreateFormField("method")
+	if err != nil {
+		return nil, "", err
+	}
+	_, err = fw.Write([]byte("sendPhoto"))
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Параметр chat_id.
+	fw, err = mw.CreateFormField("chat_id")
+	if err != nil {
+		return nil, "", err
+	}
+	_, err = fw.Write([]byte(strconv.FormatInt(charID, 10)))
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Параметр photo.
+	fw, err = mw.CreateFormFile("photo", "image") // Вместо "image" может быть любое другое название.
+	_, err = fw.Write(poster)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Параметр caption.
+	fw, err = mw.CreateFormField("caption")
+	if err != nil {
+		return nil, "", err
+	}
+	posterCaption := bestMatchTitles[0].titleOriginal
+	if !bestMatchTitles[0].releaseDate.IsZero() {
+		posterCaption += " (" + strconv.Itoa(bestMatchTitles[0].releaseDate.Year()) + ")"
+	}
+	_, err = fw.Write([]byte(posterCaption))
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Параметр reply_markup.
+	// Формируем клавиатуру из трёх кнопок с названиями "- 1 -",  "2" и т.д. до maxResultsInResponse.
+	// Номера кнопок соответствуют фильмам из bestMatchTitles.
+	fw, err = mw.CreateFormField("reply_markup")
+	if err != nil {
+		return nil, "", err
+	}
+	keyboard := telegrambotapi.InlineKeyboardMarkup{InlineKeyboard: [][]telegrambotapi.InlineKeyboardButton{}}
+	buttons := []telegrambotapi.InlineKeyboardButton{}
+	for i := range bestMatchTitles {
+		buttonText := strconv.Itoa(i + 1)
+		if i == 0 {
+			buttonText = "- " + strconv.Itoa(i+1) + " -"
+		}
+		buttons = append(buttons, telegrambotapi.InlineKeyboardButton{
+			Text: buttonText,
+			// CallbackData - это данные, которые получит бот обратно, когда
+			// пользователь нажмёт на соответствующую кнопку. Здесь мы
+			// устанавливаем её равной id фильма в таблице movie_detail.
+			CallbackData: strconv.FormatInt(bestMatchTitles[i].id, 10),
+		})
+		if (i + 1) >= maxResultsInResponse {
+			break
+		}
+	}
+	keyboard.InlineKeyboard = append(keyboard.InlineKeyboard, buttons)
+	keyboardJSONed, err := json.Marshal(keyboard)
+	if err != nil {
+		return nil, "", err
+	}
+	_, err = fw.Write(keyboardJSONed)
+	if err != nil {
+		return nil, "", err
+	}
+
+	mw.Close()
+
+	return buf.Bytes(), mw.FormDataContentType(), nil
+}
+
+// makeEditMessageMedia формирует сообщение, которое должно быть выслано в
+// ответ на нажатие пользователем какой-либо кнопки inline клавиатуры.  Второй
+// возвращаемый параметр типа string - это значения заголовка Content-Type.
+// https://core.telegram.org/bots/api#editmessagemedia
+func makeEditMessageMedia(callbackQuery *telegrambotapi.CallbackQuery) ([]byte, string, error) {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+
+	// Параметр method.
+	fw, err := mw.CreateFormField("method")
+	if err != nil {
+		return nil, "", err
+	}
+	_, err = fw.Write([]byte("editMessageMedia"))
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Параметр chat_id.
+	fw, err = mw.CreateFormField("chat_id")
+	if err != nil {
+		return nil, "", err
+	}
+	_, err = fw.Write([]byte(strconv.FormatInt(callbackQuery.Message.Chat.ID, 10)))
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Параметр message_id.
+	fw, err = mw.CreateFormField("message_id")
+	if err != nil {
+		return nil, "", err
+	}
+	_, err = fw.Write([]byte(strconv.Itoa(callbackQuery.Message.ID)))
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Параметр media.
+	fw, err = mw.CreateFormField("media")
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Каждая кнопка inline клавиатуры должна показывать постер при нажатии на
+	// неё. Этот постер можно получить из таблицы movie_detail по ID, который
+	// хранится в callbackQuery.Data. См. также в функции makeSendPhoto место,
+	// где создаётся клавиатура.
+	movieID, err := strconv.ParseInt(callbackQuery.Data, 10, 64)
+	if err != nil {
+		return nil, "", err
+	}
+	title, ok := titles[movieID]
+	if !ok {
+		return nil, "", errors.New("Movie not found")
+	}
+
+	photoFieldName := "photo"
+	inputMediaPhoto := telegrambotapi.InputMediaPhoto{
+		Type:    "photo",
+		Media:   "attach://" + photoFieldName,
+		Caption: title.titleOriginal,
+	}
+	if !title.releaseDate.IsZero() {
+		inputMediaPhoto.Caption += " (" + strconv.Itoa(title.releaseDate.Year()) + ")"
+	}
+	inputMediaPhotoJSONed, err := json.Marshal(inputMediaPhoto)
+	if err != nil {
+		return nil, "", err
+	}
+	_, err = fw.Write(inputMediaPhotoJSONed)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var poster []byte
+	// TODO: posterStmt.QueryRow не является потокобезопасным.
+	err = posterStmt.QueryRow(movieID).Scan(&poster)
+	if err != nil {
+		return nil, "", errors.New("Cannot fetch poster from database")
+	}
+	// Параметр photo.
+	fw, err = mw.CreateFormFile(photoFieldName, "image") // Вместо "image" может быть любое другое название.
+	_, err = fw.Write(poster)
+	if err != nil {
+		return nil, "", err
+	}
+
+	// Параметр reply_markup.
+	// Создаём новую клавиатуру на основе старой. По сути, клавиатура остаётся
+	// та же самая, только активной становится нажатая кнопка, т.е. нажатая
+	// кнопка выделяется по обеим сторонам знаком "-".
+	oldKeyboard := callbackQuery.Message.ReplyMarkup.InlineKeyboard
+	if len(oldKeyboard) == 0 {
+		return nil, "", errors.New("Empty keyboard")
+	}
+	fw, err = mw.CreateFormField("reply_markup")
+	if err != nil {
+		return nil, "", err
+	}
+	newButtons := []telegrambotapi.InlineKeyboardButton{}
+	for i, button := range oldKeyboard[0] { // У нас клавиатура состоит только из одного ряда кнопок.
+		buttonText := strconv.Itoa(i + 1)
+		if button.CallbackData == callbackQuery.Data {
+			buttonText = "- " + strconv.Itoa(i+1) + " -"
+		}
+		newButtons = append(newButtons, telegrambotapi.InlineKeyboardButton{
+			Text:         buttonText,
+			CallbackData: button.CallbackData,
+		})
+	}
+	newKeyboard := telegrambotapi.InlineKeyboardMarkup{InlineKeyboard: [][]telegrambotapi.InlineKeyboardButton{newButtons}}
+	newKeyboardJSONed, err := json.Marshal(newKeyboard)
+	if err != nil {
+		return nil, "", err
+	}
+	_, err = fw.Write(newKeyboardJSONed)
+	if err != nil {
+		return nil, "", err
+	}
+
+	mw.Close()
+
+	return buf.Bytes(), mw.FormDataContentType(), nil
+}
+
 // Нахождение для фильма title наиболее близких по алгоритму Левенштейна
 // фильмов в titles. Наиболее близкие будут находиться в начале возвращаемого
 // слайса.
-func getBestMatchTitles(title string, titles []titleInfo) []titleInfo {
-	titleLower := strings.ToLower(strings.TrimSpace(title))
+func getBestMatchTitles(titleUserInput string, titles map[int64]titleInfo) []titleInfo {
+	titleLower := strings.ToLower(strings.TrimSpace(titleUserInput))
 	if titleLower == "" || len(titles) == 0 {
 		return nil
 	}
@@ -351,9 +514,9 @@ func getBestMatchTitles(title string, titles []titleInfo) []titleInfo {
 	heap.Init(&titlesHeap)
 
 	// Находим 10 самых близких к фильму title фильмов по расстоянию Левенштейна.
-	for i := range titles {
-		levDist := levenshtein.Distance(titleLower, titles[i].titleLower, levInsCost, levDelCost, levSubCost)
-		titleInfo := titles[i]
+	for id := range titles {
+		levDist := levenshtein.Distance(titleLower, titles[id].titleLower, levInsCost, levDelCost, levSubCost)
+		titleInfo := titles[id]
 		titleInfo.editcost = levDist
 		heap.Push(&titlesHeap, titleInfo)
 		if titlesHeap.Len() > 10 {

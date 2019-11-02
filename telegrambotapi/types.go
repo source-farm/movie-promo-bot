@@ -90,3 +90,12 @@ type CallbackQuery struct {
 	ChatInstance string  `json:"chat_instance"`
 	Data         string  `json:"data"`
 }
+
+// InputMediaPhoto - сообщение фотографии.
+// https://core.telegram.org/bots/api#inputmediaphoto
+// TODO: добавить остальные параметры.
+type InputMediaPhoto struct {
+	Type    string `json:"type"` // Всегда должен быть равен "photo".
+	Media   string `json:"media"`
+	Caption string `json:"caption"`
+}
