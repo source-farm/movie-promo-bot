@@ -17,6 +17,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -27,7 +28,7 @@ type titleInfo struct {
 	titleLower    string    // Название фильма в нижнем регистре.
 	releaseDate   time.Time // Время выхода фильма в кинотеатрах.
 	collectionID  int64     // Разные части одного фильма принадлежат одной колеекции.
-	editcost      int       // Стоимость приведения какого-либо фильма к title. Чем меньше, тем лучше.
+	editcost      int       // Стоимость приведения по алгоритму Левенштейна какого-либо фильма к titleOriginal. Чем меньше, тем лучше.
 }
 
 // Max-куча из значений типа titleInfo.
@@ -81,6 +82,8 @@ LEFT JOIN movie ON movie_detail.fk_movie_id = movie.id
 
 var (
 	posterStmt *sqlite.Stmt
+	mu         sync.Mutex
+
 	titlesStmt *sqlite.Stmt
 	// Словарь из всех известных боту фильмов. Индексирование идёт по полю id
 	// таблицы movie_detail.
@@ -286,8 +289,9 @@ func makeSendPhoto(userInput string, charID int64) ([]byte, string, error) {
 	}
 
 	var poster []byte
-	// TODO: posterStmt.QueryRow не является потокобезопасным.
+	mu.Lock()
 	err := posterStmt.QueryRow(bestMatchTitles[0].id).Scan(&poster)
+	mu.Unlock()
 	if err != nil {
 		return nil, "", errors.New("Cannot fetch poster from database")
 	}
@@ -452,8 +456,9 @@ func makeEditMessageMedia(callbackQuery *telegrambotapi.CallbackQuery) ([]byte, 
 	}
 
 	var poster []byte
-	// TODO: posterStmt.QueryRow не является потокобезопасным.
+	mu.Lock()
 	err = posterStmt.QueryRow(movieID).Scan(&poster)
+	mu.Unlock()
 	if err != nil {
 		return nil, "", errors.New("Cannot fetch poster from database")
 	}
