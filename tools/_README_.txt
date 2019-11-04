@@ -26,8 +26,8 @@ remote.sh <tlgrm_forward_port> <tlgrm_port>
 
 local.sh <inet_host_addr> <tlgrm_forward_port> <tlgrm_port>
 
-Далее запускаем наш бот, который должен слушать порт <tlgrm_port> в ожидании
-сообщений от Telegram.
+Далее запускаем наш бот на локальной машине. Он должен слушать порт
+<tlgrm_port> в ожидании сообщений от Telegram.
 
 Пример запуска обоих скриптов:
 

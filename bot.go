@@ -90,6 +90,7 @@ var (
 
 // bot общается по Telegram Bot API с пользователями Telegram.
 func bot(cfg *botConfig, dbName string) {
+	journal.Replace(cfg.Token, "<telegram_token>")
 	goID := "[go bot]:"
 	journal.Info(goID, " started")
 
@@ -501,9 +502,9 @@ func makeEditMessageMedia(callbackQuery *telegrambotapi.CallbackQuery) ([]byte, 
 	return buf.Bytes(), mw.FormDataContentType(), nil
 }
 
-// Нахождение для фильма title наиболее близких по алгоритму Левенштейна
-// фильмов в titles. Наиболее близкие будут находиться в начале возвращаемого
-// слайса.
+// Поиск в наборе titles фильмов, которые лучше всего соответствуют фильму
+// titleUserInput. Наилучшие соответствия будут находиться в начале
+// возвращаемого слайса.
 func getBestMatchTitles(titleUserInput string, titles map[int64]titleInfo) []titleInfo {
 	titleLower := strings.ToLower(strings.TrimSpace(titleUserInput))
 	if titleLower == "" || len(titles) == 0 {

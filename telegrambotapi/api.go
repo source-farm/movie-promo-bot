@@ -63,7 +63,7 @@ func (c *Client) GetWebhookInfo() (*WebhookInfo, error) {
 	return &webhookInfo, nil
 }
 
-// SetWebhook реализует метод SetWebhook Telegram Bot API.
+// SetWebhook реализует метод setWebhook Telegram Bot API.
 // https://core.telegram.org/bots/api#setwebhook
 // TODO: добавить недостающие параметры.
 func (c *Client) SetWebhook(url string, certificate []byte) error {
@@ -118,7 +118,7 @@ func (c *Client) DeleteWebhook() error {
 	return nil
 }
 
-// AnswerCallbackQuery реализует метод AnswerCallbackQuery Telegram Bot API.
+// AnswerCallbackQuery реализует метод answerCallbackQuery Telegram Bot API.
 // https://core.telegram.org/bots/api#answercallbackquery
 // TODO: добавить недостающие параметры.
 func (c *Client) AnswerCallbackQuery(callbackQueryID string) error {

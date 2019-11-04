@@ -151,6 +151,7 @@ CREATE TABLE IF NOT EXISTS movie_fetch (
 
 // theMovieDBHarvester заполняет локальную базу фильмов через The MovieDB API.
 func theMovieDBHarvester(key, dbName string) {
+	journal.Replace(key, "<themoviedbapi_key>")
 	goID := "[go tmdb-harvester]:"
 	journal.Info(goID, " started")
 
