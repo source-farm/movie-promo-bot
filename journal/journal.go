@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 func init() {
@@ -45,6 +46,7 @@ func (l Level) String() string {
 }
 
 type logMsgInfo struct {
+	time     time.Time
 	level    Level
 	location string
 	args     []interface{}
@@ -68,10 +70,10 @@ var (
 
 	// Правила замены для логируемых сообщений.
 	replaceRule map[string]string = map[string]string{}
-	rrMu        sync.RWMutex
+	rrMu        sync.Mutex
 
 	// TODO: os.Stdout заменить на файл.
-	logger   = log.New(os.Stdout, "", log.Ldate|log.Lmicroseconds)
+	logger   = log.New(os.Stdout, "", 0)
 	msgQueue = make(chan logMsgInfo, 128)
 )
 
@@ -82,7 +84,7 @@ func Fatal(args ...interface{}) {
 	if ok {
 		location = path.Base(file) + ":" + strconv.Itoa(line)
 	}
-	logMsg := makeLogMsg(logMsgInfo{level: LevFatal, location: location, args: args})
+	logMsg := makeLogMsg(logMsgInfo{time: time.Now(), level: LevFatal, location: location, args: args})
 	logger.Fatal(logMsg)
 }
 
@@ -134,7 +136,7 @@ func addToQueue(level Level, args ...interface{}) {
 			location = path.Base(file) + ":" + strconv.Itoa(line)
 		}
 		select {
-		case msgQueue <- logMsgInfo{level: level, location: location, args: args}:
+		case msgQueue <- logMsgInfo{time: time.Now(), level: level, location: location, args: args}:
 		default:
 		}
 	}
@@ -142,13 +144,18 @@ func addToQueue(level Level, args ...interface{}) {
 
 // makeLogMsg формирует готовое к выводу сообщение лога.
 func makeLogMsg(msgInfo logMsgInfo) string {
-	fullMsg := []interface{}{msgInfo.level, " ", msgInfo.location, ": "}
+	// Выполняем lock всей функции, т.к. непонятно являются ли time.Format,
+	// fmt.Sprint и strings.Replace потокобезопасными.
+	rrMu.Lock()
+	defer rrMu.Unlock()
+
+	msgTime := msgInfo.time.Format("2006/01/02 15:04:05.000000")
+	fullMsg := []interface{}{msgTime, " ", msgInfo.level, " ", msgInfo.location, ": "}
 	fullMsg = append(fullMsg, msgInfo.args...)
 	logMsg := fmt.Sprint(fullMsg...)
-	rrMu.RLock()
 	for old, new := range replaceRule {
 		logMsg = strings.Replace(logMsg, old, new, -1)
 	}
-	rrMu.RUnlock()
+
 	return logMsg
 }
