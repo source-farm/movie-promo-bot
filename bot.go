@@ -50,6 +50,174 @@ func (h *titleInfoHeap) Pop() interface{} {
 	return x
 }
 
+// Titles - хранилище названий фильмов.
+type Titles struct {
+	// Словарь из всех известных боту фильмов. Индексирование идёт по полю id
+	// таблицы movie_detail.
+	storage map[int64]titleInfo
+	mu      sync.RWMutex
+
+	titlesFetchStmt *sqlite.Stmt
+}
+
+// Загрузка из БД фильмов, которых ещё нет в t.
+func (t *Titles) loadNew() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	// Находим макс. id, чтобы запросить у БД только новые фильмы.
+	maxID := int64(0)
+	for id := range t.storage {
+		if id > maxID {
+			maxID = id
+		}
+	}
+
+	rows, err := t.titlesFetchStmt.Query(maxID)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, collectionID int64
+		var title, releaseDateStr string
+		err = rows.Scan(&id, &title, &releaseDateStr, &collectionID)
+		if err != nil {
+			return err
+		}
+		releaseDate, err := time.Parse("2006-01-02", releaseDateStr)
+		if err != nil {
+			journal.Error(err)
+			releaseDate = time.Time{}
+		}
+		t.storage[id] = titleInfo{
+			id:            id,
+			titleOriginal: title,
+			titleLower:    strings.ToLower(title),
+			releaseDate:   releaseDate,
+			collectionID:  collectionID,
+		}
+	}
+	if rows.Err() != nil {
+		return err
+	}
+
+	return nil
+}
+
+// bestMatches находит фильмы, которые лучше всего соответствуют фильму title.
+// Наилучшие соответствия находятся в начале возвращаемого слайса.
+func (t *Titles) bestMatches(title string) []titleInfo {
+	titleLower := strings.ToLower(strings.TrimSpace(title))
+	if titleLower == "" {
+		return nil
+	}
+
+	var titlesHeap titleInfoHeap
+	heap.Init(&titlesHeap)
+
+	// Находим 10 самых близких к фильму title фильмов по расстоянию Левенштейна.
+	t.mu.RLock()
+	for id, titleInfo := range t.storage {
+		levDist := levenshtein.Distance(titleLower, t.storage[id].titleLower, levInsCost, levDelCost, levSubCost)
+		titleInfo.editcost = levDist
+		heap.Push(&titlesHeap, titleInfo)
+		if titlesHeap.Len() > 10 {
+			heap.Pop(&titlesHeap)
+		}
+	}
+	t.mu.RUnlock()
+
+	// titlesLevRanked должен содержать фильмы в порядке возрастания расстояния
+	// Левенштейна, т.е. самые близкие к title фильмы находятся в его начале.
+	titlesLevRanked := make([]titleInfo, titlesHeap.Len())
+	for i := len(titlesLevRanked) - 1; i >= 0; i-- {
+		titlesLevRanked[i] = heap.Pop(&titlesHeap).(titleInfo)
+	}
+
+	// Если в начале titlesLevRanked содержит фильмы с одинаковыми названиями, то
+	// более выше ставим более позднее снятый фильм. Примером такого фильма
+	// является Lion King, который был снят в 1994 и 2019, т.е. выше в списке
+	// должен быть фильм 2019 года.
+	for i := 1; i < len(titlesLevRanked); i++ {
+		if titlesLevRanked[i].titleLower != titlesLevRanked[0].titleLower {
+			break
+		}
+		for j := i; j > 0; j-- {
+			if titlesLevRanked[j].releaseDate.After(titlesLevRanked[j-1].releaseDate) {
+				titlesLevRanked[j-1], titlesLevRanked[j] = titlesLevRanked[j], titlesLevRanked[j-1]
+			} else {
+				break
+			}
+		}
+	}
+
+	if len(titlesLevRanked) <= 3 {
+		return titlesLevRanked
+	}
+
+	//- Формируем окончательный список фильмов.
+	//- Сначала должен идти фильм, который по расстоянию Левенштейна оказался на
+	//- первом месте. После него должны идти другие части этого фильма,
+	//- упорядоченные по дате релиза.
+	titlesRanked := []titleInfo{titlesLevRanked[0]}
+	if titlesLevRanked[0].collectionID != 0 {
+		for _, title := range titlesLevRanked[1:] {
+			if title.collectionID == titlesLevRanked[0].collectionID {
+				titlesRanked = append(titlesRanked, title)
+			}
+		}
+
+		if len(titlesRanked) > 1 {
+			topTitleOtherParts := titlesRanked[1:]
+			sort.Slice(topTitleOtherParts, func(i, j int) bool {
+				return topTitleOtherParts[i].releaseDate.Before(topTitleOtherParts[j].releaseDate)
+			})
+		}
+	}
+
+	//- Далее должны идти все части фильма, который оказался на втором месте по
+	//- расстоянию Левенштейна, упорядоченные по дате релиза по возрастанию.
+	if titlesLevRanked[1].collectionID != titlesLevRanked[0].collectionID || titlesLevRanked[1].collectionID == 0 {
+		topRankedCollectionLen := len(titlesRanked)
+		titlesRanked = append(titlesRanked, titlesLevRanked[1])
+		if titlesLevRanked[1].collectionID != 0 {
+			for _, title := range titlesLevRanked[2:] {
+				if title.collectionID == titlesLevRanked[1].collectionID {
+					titlesRanked = append(titlesRanked, title)
+				}
+			}
+		}
+
+		if len(titlesRanked) > topRankedCollectionLen {
+			secondRankedCollection := titlesRanked[topRankedCollectionLen:]
+			sort.Slice(secondRankedCollection, func(i, j int) bool {
+				return secondRankedCollection[i].releaseDate.Before(secondRankedCollection[j].releaseDate)
+			})
+		}
+	}
+
+	//- В конце идут остальные фильмы.
+	for _, title := range titlesLevRanked[2:] {
+		if title.collectionID == 0 ||
+			title.collectionID != titlesLevRanked[0].collectionID && title.collectionID != titlesLevRanked[1].collectionID {
+			titlesRanked = append(titlesRanked, title)
+		}
+	}
+
+	return titlesRanked
+}
+
+func (t *Titles) get(movieID int64) (titleInfo, error) {
+	t.mu.RLock()
+	tInfo, ok := t.storage[movieID]
+	t.mu.RUnlock()
+	if !ok {
+		return titleInfo{}, errors.New("movie not found")
+	}
+	return tInfo, nil
+}
+
 const (
 	// Таймаут выполнения запроса к БД.
 	dbQueryTimeoutMS = 10000
@@ -84,14 +252,11 @@ var (
 	posterStmt *sqlite.Stmt
 	mu         sync.Mutex
 
-	titlesStmt *sqlite.Stmt
-	// Словарь из всех известных боту фильмов. Индексирование идёт по полю id
-	// таблицы movie_detail.
-	titles      map[int64]titleInfo = map[int64]titleInfo{}
+	titles      Titles = Titles{storage: map[int64]titleInfo{}}
 	tlgrmClient *telegrambotapi.Client
 )
 
-// bot общается по Telegram Bot API с пользователями Telegram.
+// bot настраивает общение по Telegram Bot API с пользователями Telegram.
 func bot(cfg *botConfig, dbName string) {
 	journal.Replace(cfg.Token, "<telegram_token>")
 	goID := "[go bot]:"
@@ -119,20 +284,24 @@ func bot(cfg *botConfig, dbName string) {
 	defer posterStmt.Close()
 	journal.Trace(goID, " poster query prepared")
 
-	titlesStmt, err = dbConn.Prepare(titlesQuery)
+	titles.titlesFetchStmt, err = dbConn.Prepare(titlesQuery)
 	if err != nil {
 		journal.Fatal(goID, " ", err)
 	}
-	defer titlesStmt.Close()
+	defer titles.titlesFetchStmt.Close()
 	journal.Trace(goID, " titles query prepared")
 
-	// Загружаем названия фильмов из БД.
-	journal.Info(goID, " loading movie titles from database")
-	err = loadTitles(titles, titlesStmt)
-	if err != nil {
-		journal.Fatal(err)
-	}
-	journal.Info(goID, " movie titles loading end")
+	// Горутина для периодического вычитывания новых фильмов из БД.
+	go func() {
+		journal.Info(goID, " loading movie titles from database")
+		err = titles.loadNew()
+		if err == nil {
+			journal.Info(goID, " movie titles loading finished ok")
+		} else {
+			journal.Error(err)
+		}
+		time.Sleep(time.Hour * 24)
+	}()
 
 	// Установка Webhook'а.
 	httpClient := &http.Client{
@@ -144,7 +313,7 @@ func bot(cfg *botConfig, dbName string) {
 		journal.Fatal(goID, " ", err)
 	}
 	// cfg.WebhookAddr и cfg.PublicCert взаимосвязаны. Подробнее можно
-	// прочитать в TelegramWebhook.txt.
+	// прочитать в docs/TelegramWebhook.txt.
 	webhookPath := "/" + cfg.Token
 	webhookURL := "https://" + net.JoinHostPort(cfg.WebhookAddr, strconv.Itoa(cfg.WebhookPort)) + webhookPath
 	if !(webhookInfo.URL == webhookURL && webhookInfo.HasCustomCertificate) {
@@ -164,8 +333,10 @@ func bot(cfg *botConfig, dbName string) {
 		}
 		journal.Info(goID, " webhook set OK")
 	} else {
-		journal.Info(goID, " webhook is already set")
+		journal.Info(goID, " webhook is already set, skip webhook setting")
 	}
+
+	journal.Info(goID, " webhook is already set, skip webhook setting")
 
 	// Запускаем обработчик сообщений от Telegram.
 	http.HandleFunc(webhookPath, telegramHandler)
@@ -184,6 +355,8 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
+	updateReceiveTime := time.Now()
+
 	var update telegrambotapi.Update
 	err = json.Unmarshal(body, &update)
 	if err != nil {
@@ -191,6 +364,8 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 		http.Error(w, "Cannot unmarshal update", http.StatusInternalServerError)
 		return
 	}
+
+	journal.Info("telegram update [id " + strconv.Itoa(update.ID) + "] received")
 
 	switch {
 	// Пришло новое сообщение.
@@ -232,58 +407,15 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
-}
 
-// Загрузка из БД названий фильмов в titles. Повторный вызов функции
-// добавляет к titles новые фильмы, а не извлекает всё заново.
-func loadTitles(titles map[int64]titleInfo, titlesQuery *sqlite.Stmt) error {
-	// В слайсе titles фильмы должны идти по возрастанию поля id.
-	// Находим макс. id, чтобы запросить у БД только новые фильмы.
-	maxID := int64(0)
-	for id := range titles {
-		if id > maxID {
-			maxID = id
-		}
-	}
-
-	rows, err := titlesStmt.Query(maxID)
-	if err != nil {
-		return err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id, collectionID int64
-		var title, releaseDateStr string
-		err = rows.Scan(&id, &title, &releaseDateStr, &collectionID)
-		if err != nil {
-			return err
-		}
-		releaseDate, err := time.Parse("2006-01-02", releaseDateStr)
-		if err != nil {
-			journal.Error(err)
-			releaseDate = time.Time{}
-		}
-		t := titleInfo{
-			id:            id,
-			titleOriginal: title,
-			titleLower:    strings.ToLower(title), // Используется в getBestMatchTitles.
-			releaseDate:   releaseDate,
-			collectionID:  collectionID,
-		}
-		titles[id] = t
-	}
-	if rows.Err() != nil {
-		return err
-	}
-
-	return nil
+	journal.Info("telegram update [id ", update.ID, "] processing end (", time.Since(updateReceiveTime), ")")
 }
 
 // makeSendPhoto возвращает сообщение sendPhoto из Telegram Bot API:
 // https://core.telegram.org/bots/api#sendphoto
 // Параметр типа string после сообщения - это значение заголовка Content-Type.
 func makeSendPhoto(userInput string, charID int64) ([]byte, string, error) {
-	bestMatchTitles := getBestMatchTitles(userInput, titles)
+	bestMatchTitles := titles.bestMatches(userInput)
 	if len(bestMatchTitles) == 0 {
 		return nil, "", errors.New("No match in movies database")
 	}
@@ -432,9 +564,9 @@ func makeEditMessageMedia(callbackQuery *telegrambotapi.CallbackQuery) ([]byte, 
 	if err != nil {
 		return nil, "", err
 	}
-	title, ok := titles[movieID]
-	if !ok {
-		return nil, "", errors.New("Movie not found")
+	title, err := titles.get(movieID)
+	if err != nil {
+		return nil, "", err
 	}
 
 	photoFieldName := "photo"
@@ -505,107 +637,4 @@ func makeEditMessageMedia(callbackQuery *telegrambotapi.CallbackQuery) ([]byte, 
 	mw.Close()
 
 	return buf.Bytes(), mw.FormDataContentType(), nil
-}
-
-// Поиск в наборе titles фильмов, которые лучше всего соответствуют фильму
-// titleUserInput. Наилучшие соответствия будут находиться в начале
-// возвращаемого слайса.
-func getBestMatchTitles(titleUserInput string, titles map[int64]titleInfo) []titleInfo {
-	titleLower := strings.ToLower(strings.TrimSpace(titleUserInput))
-	if titleLower == "" || len(titles) == 0 {
-		return nil
-	}
-
-	var titlesHeap titleInfoHeap
-	heap.Init(&titlesHeap)
-
-	// Находим 10 самых близких к фильму title фильмов по расстоянию Левенштейна.
-	for id := range titles {
-		levDist := levenshtein.Distance(titleLower, titles[id].titleLower, levInsCost, levDelCost, levSubCost)
-		titleInfo := titles[id]
-		titleInfo.editcost = levDist
-		heap.Push(&titlesHeap, titleInfo)
-		if titlesHeap.Len() > 10 {
-			heap.Pop(&titlesHeap)
-		}
-	}
-
-	// titlesLevRanked должен содержать фильмы в порядке возрастания расстояния
-	// Левенштейна, т.е. самые близкие к title фильмы находятся в его начале.
-	titlesLevRanked := make([]titleInfo, titlesHeap.Len())
-	for i := len(titlesLevRanked) - 1; i >= 0; i-- {
-		titlesLevRanked[i] = heap.Pop(&titlesHeap).(titleInfo)
-	}
-
-	// Если в начале titlesLevRanked содержит фильмы с одинаковыми названиями, то
-	// более выше ставим более позднее снятый фильм. Примером такого фильма
-	// является Lion King, который был снят в 1994 и 2019, т.е. выше в списке
-	// должен быть фильм 2019 года.
-	for i := 1; i < len(titlesLevRanked); i++ {
-		if titlesLevRanked[i].titleLower != titlesLevRanked[0].titleLower {
-			break
-		}
-		for j := i; j > 0; j-- {
-			if titlesLevRanked[j].releaseDate.After(titlesLevRanked[j-1].releaseDate) {
-				titlesLevRanked[j-1], titlesLevRanked[j] = titlesLevRanked[j], titlesLevRanked[j-1]
-			} else {
-				break
-			}
-		}
-	}
-
-	if len(titlesLevRanked) <= 3 {
-		return titlesLevRanked
-	}
-
-	//- Формируем окончательный список фильмов.
-	//- Сначала должен идти фильм, который по расстоянию Левенштейна оказался на
-	//- первом месте. После него должны идти другие части этого фильма,
-	//- упорядоченные по дате релиза.
-	titlesRanked := []titleInfo{titlesLevRanked[0]}
-	if titlesLevRanked[0].collectionID != 0 {
-		for _, title := range titlesLevRanked[1:] {
-			if title.collectionID == titlesLevRanked[0].collectionID {
-				titlesRanked = append(titlesRanked, title)
-			}
-		}
-
-		if len(titlesRanked) > 1 {
-			topTitleOtherParts := titlesRanked[1:]
-			sort.Slice(topTitleOtherParts, func(i, j int) bool {
-				return topTitleOtherParts[i].releaseDate.Before(topTitleOtherParts[j].releaseDate)
-			})
-		}
-	}
-
-	//- Далее должны идти все части фильма, который оказался на втором месте по
-	//- расстоянию Левенштейна, упорядоченные по дате релиза по возрастанию.
-	if titlesLevRanked[1].collectionID != titlesLevRanked[0].collectionID || titlesLevRanked[1].collectionID == 0 {
-		topRankedCollectionLen := len(titlesRanked)
-		titlesRanked = append(titlesRanked, titlesLevRanked[1])
-		if titlesLevRanked[1].collectionID != 0 {
-			for _, title := range titlesLevRanked[2:] {
-				if title.collectionID == titlesLevRanked[1].collectionID {
-					titlesRanked = append(titlesRanked, title)
-				}
-			}
-		}
-
-		if len(titlesRanked) > topRankedCollectionLen {
-			secondRankedCollection := titlesRanked[topRankedCollectionLen:]
-			sort.Slice(secondRankedCollection, func(i, j int) bool {
-				return secondRankedCollection[i].releaseDate.Before(secondRankedCollection[j].releaseDate)
-			})
-		}
-	}
-
-	//- В конце идут остальные фильмы.
-	for _, title := range titlesLevRanked[2:] {
-		if title.collectionID == 0 ||
-			title.collectionID != titlesLevRanked[0].collectionID && title.collectionID != titlesLevRanked[1].collectionID {
-			titlesRanked = append(titlesRanked, title)
-		}
-	}
-
-	return titlesRanked
 }
