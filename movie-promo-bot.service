@@ -1,0 +1,17 @@
+[Unit]
+Description=Movie Promo Bot
+# Бот должен быть запущен после настройки сети.
+After=network.target
+# Нет ограничений на количество перезапусков (см. man 5 systemd.unit).
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=2
+User=user
+WorkingDirectory=
+ExecStart=
+
+[Install]
+WantedBy=multi-user.target
