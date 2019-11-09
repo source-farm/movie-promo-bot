@@ -7,6 +7,7 @@ import (
 	"bot/telegrambotapi"
 	"bytes"
 	"container/heap"
+	"context"
 	"encoding/json"
 	"errors"
 	"io/ioutil"
@@ -257,10 +258,15 @@ var (
 )
 
 // bot настраивает общение по Telegram Bot API с пользователями Telegram.
-func bot(cfg *botConfig, dbName string) {
-	journal.Replace(cfg.Token, "<telegram_token>")
+func bot(ctx context.Context, finished *sync.WaitGroup, cfg botConfig, dbName string) {
 	goID := "[go bot]:"
+	journal.Replace(cfg.Token, "<telegram_token>")
 	journal.Info(goID, " started")
+
+	defer func() {
+		finished.Done()
+		journal.Info(goID, " finished")
+	}()
 
 	// Установка соединения с БД и её настройка.
 	dbConn, err := sqlite.NewConn(dbName)
@@ -339,10 +345,25 @@ func bot(cfg *botConfig, dbName string) {
 	journal.Info(goID, " webhook is already set, skip webhook setting")
 
 	// Запускаем обработчик сообщений от Telegram.
+	server := http.Server{Addr: ":" + strconv.Itoa(cfg.WebhookPort)}
 	http.HandleFunc(webhookPath, telegramHandler)
-	err = http.ListenAndServeTLS(":"+strconv.Itoa(cfg.WebhookPort), cfg.PublicCert, cfg.PrivateKey, nil)
-	if err != nil {
-		journal.Fatal(goID, " ", err)
+	// Запускаем HTTP сервер в отдельной горутине, чтобы можно было его
+	// нормально остановить.
+	go func() {
+		err := server.ListenAndServeTLS(cfg.PublicCert, cfg.PrivateKey)
+		if err != nil && err != http.ErrServerClosed {
+			journal.Fatal(err)
+		}
+	}()
+
+	select {
+	case <-ctx.Done():
+		timeoutCtx, cancel := context.WithTimeout(context.Background(), time.Second*60)
+		defer cancel()
+		err = server.Shutdown(timeoutCtx)
+		if err != nil {
+			journal.Error(err)
+		}
 	}
 }
 

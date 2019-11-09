@@ -7,6 +7,7 @@ import (
 	"bot/themoviedb"
 	"bufio"
 	"compress/gzip"
+	"context"
 	"encoding/json"
 	"net/http"
 	"os"
@@ -150,10 +151,15 @@ CREATE TABLE IF NOT EXISTS movie_fetch (
 }
 
 // theMovieDBHarvester заполняет локальную базу фильмов через The MovieDB API.
-func theMovieDBHarvester(key, dbName string) {
+func theMovieDBHarvester(ctx context.Context, finished *sync.WaitGroup, key, dbName string) {
 	journal.Replace(key, "<themoviedbapi_key>")
 	goID := "[go tmdb-harvester]:"
 	journal.Info(goID, " started")
+
+	defer func() {
+		finished.Done()
+		journal.Info(goID, " finished")
+	}()
 
 	initDB(goID, dbName)
 
@@ -166,19 +172,19 @@ func theMovieDBHarvester(key, dbName string) {
 		journal.Fatal(goID, " ", err)
 	}
 
-	// Для ожидания завершения tmdbCrawler'ов.
+	// Для ожидания завершения tmdbSeeker'а и tmdbCrawler'ов.
 	var wg sync.WaitGroup
 
 	for {
 		journal.Info(goID, " starting new movies fetch")
-		wg.Add(crawlersNum)
+		wg.Add(crawlersNum + 1) // +1 для горутины tmdbSeeker.
 
 		movieID := make(chan int)
-		// moviesSeeker записывает в канал movieID идентификаторы ещё не
+		// tmdbSeeker записывает в канал movieID идентификаторы ещё не
 		// полностью скачанных фильмов. Горутины tmdbCrawler извлекают эти
 		// идентификаторы из movieID и выполняют фактическую работу по
 		// скачиванию и добавлению фильмов в БД.
-		go tmdbSeeker(tmdbClient, dbName, movieID)
+		go tmdbSeeker(ctx, &wg, tmdbClient, dbName, movieID)
 		for i := 0; i < crawlersNum; i++ {
 			crawlerID := "[go tmdb-crawler-" + strconv.Itoa(i+1) + "]:"
 			go tmdbCrawler(crawlerID, &wg, tmdbClient, dbName, movieID)
@@ -189,7 +195,13 @@ func theMovieDBHarvester(key, dbName string) {
 
 		// После завершения сессии получения фильмов ждём 1 день перед следующей сессией.
 		journal.Info(goID, " sleeping for 1 day")
-		time.Sleep(time.Hour * 24)
+		timer := time.NewTimer(time.Hour * 24)
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			journal.Info(goID, " sleeping cancelled")
+			return
+		}
 
 		// Пытаемся снова сконфигурировать The Movie DB API клиента, т.к.
 		// документация рекомендует это делать раз в несколько дней.
@@ -202,7 +214,7 @@ func theMovieDBHarvester(key, dbName string) {
 
 // tmdbSeeker записывает в канал movieID идентификаторы фильмов, для которых ещё
 // не была найдена вся необходимая информация.
-func tmdbSeeker(client *themoviedb.Client, dbName string, movieID chan<- int) {
+func tmdbSeeker(ctx context.Context, wg *sync.WaitGroup, client *themoviedb.Client, dbName string, movieID chan<- int) {
 	goID := "[go tmdb-seeker]:"
 	dailyExportFilename := "daily"
 
@@ -214,6 +226,7 @@ func tmdbSeeker(client *themoviedb.Client, dbName string, movieID chan<- int) {
 			os.Remove(dailyExportFilename)
 		}
 		close(movieID)
+		wg.Done()
 		journal.Info(goID, " finished")
 	}()
 
@@ -237,7 +250,7 @@ func tmdbSeeker(client *themoviedb.Client, dbName string, movieID chan<- int) {
 	defer fetchResultStmt.Close()
 
 	// Обрабатываем фильмы, которые сейчас идут в кинотеатрах.
-	journal.Info(goID, " processing now playing movies")
+	journal.Info(goID, " processing now-playing movies")
 	rateLimitStr := strconv.Itoa(int(themoviedb.APIRateLimitDur.Seconds()))
 pagesLoop:
 	for page := 1; page <= themoviedb.NowPlayingMaxPage; page++ {
@@ -245,16 +258,16 @@ pagesLoop:
 		var err error
 	pageFetchLoop:
 		for i := 0; i < tmdbMaxRetries; i++ {
-			journal.Trace(goID, " fetching now playing page #", page)
+			journal.Trace(goID, " fetching now-playing page #", page)
 			movies, err = client.GetNowPlaying(page)
 			switch err {
 			case nil:
-				journal.Info(goID, " now playing page #", page, " fetch OK")
+				journal.Info(goID, " now-playing page #", page, " fetch OK")
 				break pageFetchLoop
 
 			case themoviedb.ErrRateLimit:
 				if i == (tmdbMaxRetries - 1) {
-					journal.Info(goID, " now playing page #", page, " fetch fail")
+					journal.Info(goID, " now-playing page #", page, " fetch fail")
 					break pageFetchLoop
 				} else {
 					journal.Info(goID, " tmdb rate limit exceeded, sleeping for "+rateLimitStr+" sec")
@@ -265,7 +278,7 @@ pagesLoop:
 				break pagesLoop
 
 			default:
-				journal.Error(goID, " now playing page #", page, " fetch error: ", err)
+				journal.Error(goID, " now-playing page #", page, " fetch error: ", err)
 				break pageFetchLoop
 			}
 		}
@@ -278,11 +291,15 @@ pagesLoop:
 			}
 
 			if !finished {
-				movieID <- movie.TMDBID
+				select {
+				case movieID <- movie.TMDBID:
+				case <-ctx.Done():
+					return
+				}
 			}
 		}
 	}
-	journal.Info(goID, " now playing movies processing end")
+	journal.Info(goID, " now-playing movies processing end")
 
 	// Обрабатываем фильмы из базы с краткой информацией о всех фильмах
 	// The MovieDB API. Пытаемся скачать эту базу за какой-либо из пяти
@@ -337,7 +354,11 @@ pagesLoop:
 		}
 
 		if !finished {
-			movieID <- movie.TMDBID
+			select {
+			case movieID <- movie.TMDBID:
+			case <-ctx.Done():
+				return
+			}
 		}
 	}
 	err = scanner.Err()
@@ -349,10 +370,9 @@ pagesLoop:
 // tmdbCrawler извлекает по The MovieDB API данные о фильмах из movieID и
 // записывает эти данные в БД.
 func tmdbCrawler(goID string, wg *sync.WaitGroup, client *themoviedb.Client, dbName string, movieID <-chan int) {
-	defer wg.Done()
-
 	journal.Info(goID, " started")
 	defer func() {
+		wg.Done()
 		journal.Info(goID, " finished")
 	}()
 

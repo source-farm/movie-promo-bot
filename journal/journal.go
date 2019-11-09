@@ -15,9 +15,25 @@ import (
 
 func init() {
 	go func() {
-		for msgInfo := range msgQueue {
-			logMsg := makeLogMsg(msgInfo)
-			logger.Print(logMsg)
+		for {
+			select {
+			case msgInfo := <-msgQueue:
+				logMsg := makeLogMsg(msgInfo)
+				logger.Print(logMsg)
+
+			case <-stop:
+				for {
+					select {
+					case msgInfo := <-msgQueue:
+						logMsg := makeLogMsg(msgInfo)
+						logger.Print(logMsg)
+
+					default:
+						close(msgQueue)
+						return
+					}
+				}
+			}
 		}
 	}()
 }
@@ -72,9 +88,11 @@ var (
 	replaceRule map[string]string = map[string]string{}
 	rrMu        sync.Mutex
 
-	// TODO: os.Stdout заменить на файл.
+	// Сообщения направляются на стандартный вывод, т.к. сохранением логов
+	// будет заниматься systemd.
 	logger   = log.New(os.Stdout, "", 0)
 	msgQueue = make(chan logMsgInfo, 128)
+	stop     = make(chan struct{})
 )
 
 // Fatal логирует сообщение в args и заканчивает выполнение приложения.
@@ -123,6 +141,12 @@ func Replace(old, new string) {
 	rrMu.Lock()
 	defer rrMu.Unlock()
 	replaceRule[old] = new
+}
+
+// Stop выводит оставшиеся сообщения и останавливает логирование.
+// Вызов какой-либо другой функции после этого может привести к панике.
+func Stop() {
+	stop <- struct{}{}
 }
 
 // addToQueue добавляет сообщение в очедерь логирования.
