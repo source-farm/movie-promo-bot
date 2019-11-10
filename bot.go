@@ -342,8 +342,6 @@ func bot(ctx context.Context, finished *sync.WaitGroup, cfg botConfig, dbName st
 		journal.Info(goID, " webhook is already set, skip webhook setting")
 	}
 
-	journal.Info(goID, " webhook is already set, skip webhook setting")
-
 	// Запускаем обработчик сообщений от Telegram.
 	server := http.Server{Addr: ":" + strconv.Itoa(cfg.WebhookPort)}
 	http.HandleFunc(webhookPath, telegramHandler)
@@ -391,7 +389,19 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 	switch {
 	// Пришло новое сообщение.
 	case update.Message.ID != 0:
-		sendPhoto, contentType, err := makeSendPhoto(update.Message.Text, update.Message.Chat.ID)
+		fallthrough
+
+	// Получено редактированное сообщение какого-то ранее отправленного пользователем сообщения.
+	case update.EditedMessage.ID != 0:
+		var message telegrambotapi.Message
+		var replyToMessageID int
+		if update.Message.ID != 0 {
+			message = update.Message
+		} else {
+			message = update.EditedMessage
+			replyToMessageID = message.ID
+		}
+		sendPhoto, contentType, err := makeSendPhoto(message.Text, message.Chat.ID, replyToMessageID)
 		if err != nil {
 			journal.Error(err)
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -434,8 +444,10 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 
 // makeSendPhoto возвращает сообщение sendPhoto из Telegram Bot API:
 // https://core.telegram.org/bots/api#sendphoto
+// Если replyToMessageID не равен 0, то в возвращаемое sendPhoto сообщение
+// добавляется параметр reply_to_message_id.
 // Параметр типа string после сообщения - это значение заголовка Content-Type.
-func makeSendPhoto(userInput string, charID int64) ([]byte, string, error) {
+func makeSendPhoto(userInput string, chatID int64, replyToMessageID int) ([]byte, string, error) {
 	bestMatchTitles := titles.bestMatches(userInput)
 	if len(bestMatchTitles) == 0 {
 		return nil, "", errors.New("No match in movies database")
@@ -467,7 +479,7 @@ func makeSendPhoto(userInput string, charID int64) ([]byte, string, error) {
 	if err != nil {
 		return nil, "", err
 	}
-	_, err = fw.Write([]byte(strconv.FormatInt(charID, 10)))
+	_, err = fw.Write([]byte(strconv.FormatInt(chatID, 10)))
 	if err != nil {
 		return nil, "", err
 	}
@@ -491,6 +503,18 @@ func makeSendPhoto(userInput string, charID int64) ([]byte, string, error) {
 	_, err = fw.Write([]byte(posterCaption))
 	if err != nil {
 		return nil, "", err
+	}
+
+	// Параметр reply_to_message_id.
+	if replyToMessageID != 0 {
+		fw, err = mw.CreateFormField("reply_to_message_id")
+		if err != nil {
+			return nil, "", err
+		}
+		_, err = fw.Write([]byte(strconv.Itoa(replyToMessageID)))
+		if err != nil {
+			return nil, "", err
+		}
 	}
 
 	// Параметр reply_markup.
