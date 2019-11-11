@@ -7,6 +7,7 @@ import (
 	"io/ioutil"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 )
 
 // Client используется для выполнения запросов к Telegram Bot API.
@@ -138,6 +139,48 @@ func (c *Client) AnswerCallbackQuery(callbackQueryID string) error {
 	mw.Close()
 
 	resp, err := c.httpClient.Post(c.apiBaseURL+"/answerCallbackQuery", mw.FormDataContentType(), &buf)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return errors.New("telegrambotapi: " + resp.Status)
+	}
+
+	return nil
+}
+
+// sendMessage отправляет текстовое сообщение.
+// https://core.telegram.org/bots/api#sendmessage
+// TODO: добавить недостающие параметры.
+func (c *Client) SendMessage(chatID int64, message string) error {
+	var buf bytes.Buffer
+	mw := multipart.NewWriter(&buf)
+
+	// Параметр chat_id.
+	fw, err := mw.CreateFormField("chat_id")
+	if err != nil {
+		return err
+	}
+	_, err = fw.Write([]byte(strconv.FormatInt(chatID, 10)))
+	if err != nil {
+		return err
+	}
+
+	// Параметр text.
+	fw, err = mw.CreateFormField("text")
+	if err != nil {
+		return err
+	}
+	_, err = fw.Write([]byte(message))
+	if err != nil {
+		return err
+	}
+
+	mw.Close()
+
+	resp, err := c.httpClient.Post(c.apiBaseURL+"/sendMessage", mw.FormDataContentType(), &buf)
 	if err != nil {
 		return err
 	}

@@ -53,6 +53,7 @@ type Message struct {
 	Date        int                  `json:"date"`
 	Chat        Chat                 `json:"chat"`
 	Text        string               `json:"text"`
+	Entity      []Entity             `json:"entities"`
 	ReplyMarkup InlineKeyboardMarkup `json:"reply_markup"`
 }
 
@@ -99,4 +100,13 @@ type InputMediaPhoto struct {
 	Type    string `json:"type"` // Всегда должен быть равен "photo".
 	Media   string `json:"media"`
 	Caption string `json:"caption"`
+}
+
+// Entity - особенные сущности текстовых сообщений (команды, URL и т.д.):
+// https://core.telegram.org/bots/api#messageentity
+// TODO: добавить остальные параметры.
+type Entity struct {
+	Type   string `json:"type"`
+	Offset int    `json:"offset"`
+	Length int    `json:"length"`
 }

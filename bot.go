@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bot/iso6391"
 	"bot/journal"
 	"bot/levenshtein"
 	"bot/sqlite"
@@ -247,6 +248,12 @@ LEFT JOIN movie ON movie_detail.fk_movie_id = movie.id
 	// Макс. количество вариантов постеров, которые отправляются в ответ на
 	// запрос Telegram клиента.
 	maxResultsInResponse = 3
+
+	// Сообщения, которые отправляются при получении команды /start или /help.
+	greetingMessageRu = `Отправьте мне название фильма и я покажу его постер.`
+	greetingMessageEn = `Please send me a movie title and you will get its poster.`
+	helpMessageRu     = `Отправьте мне название фильма, например "Фильм, фильм, фильм", чтобы увидеть его постер.`
+	helpMessageEn     = `Please send me a movie title like "Frozen" to get its poster.`
 )
 
 var (
@@ -255,6 +262,17 @@ var (
 
 	titles      Titles = Titles{storage: map[int64]titleInfo{}}
 	tlgrmClient *telegrambotapi.Client
+)
+
+type updateType = int
+
+// Виды сообщений от Telegram, которые умеет обрабатывать бот.
+const (
+	updateCommand       updateType = iota // Команда.
+	updateMessage                         // Обычное сообщение.
+	updateEditedMessage                   // Редактированное сообщение.
+	updateCallbackQuery                   // Нажатие кнопки ранее отправленной inline клавиатуры.
+	updateUnknown                         // Неизвестный вид сообщения.
 )
 
 // bot настраивает общение по Telegram Bot API с пользователями Telegram.
@@ -386,13 +404,38 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 
 	journal.Info("telegram update [id " + strconv.Itoa(update.ID) + "] received")
 
-	switch {
+	switch getUpdateType(&update) {
+	// Получена команда.
+	case updateCommand:
+		message := ""
+		// Выбираем сообщение, которое нужно отправить в зависимости от команды и языка.
+		if strings.HasPrefix(update.Message.Text, "/start") {
+			message = greetingMessageEn
+			if update.Message.From.LangCode == iso6391.Ru {
+				message = greetingMessageRu
+			}
+		} else if strings.HasPrefix(update.Message.Text, "/help") {
+			message = helpMessageEn
+			if update.Message.From.LangCode == iso6391.Ru {
+				message = helpMessageRu
+			}
+		}
+
+		if message != "" {
+			err := tlgrmClient.SendMessage(update.Message.Chat.ID, message)
+			if err != nil {
+				journal.Error(err)
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+
 	// Пришло новое сообщение.
-	case update.Message.ID != 0:
+	case updateMessage:
 		fallthrough
 
 	// Получено редактированное сообщение какого-то ранее отправленного пользователем сообщения.
-	case update.EditedMessage.ID != 0:
+	case updateEditedMessage:
 		var message telegrambotapi.Message
 		var replyToMessageID int
 		if update.Message.ID != 0 {
@@ -415,7 +458,7 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 		}
 
 	// Пользователь нажал на кнопку ранее отправленного сообщения с inline клавиатурой.
-	case update.CallbackQuery.ID != "":
+	case updateCallbackQuery:
 		editMessageMedia, contentType, err := makeEditMessageMedia(&update.CallbackQuery)
 		if err != nil {
 			journal.Error(err)
@@ -682,4 +725,23 @@ func makeEditMessageMedia(callbackQuery *telegrambotapi.CallbackQuery) ([]byte, 
 	mw.Close()
 
 	return buf.Bytes(), mw.FormDataContentType(), nil
+}
+
+// Определение типа сообщения, которые был получен от Telegram.
+func getUpdateType(update *telegrambotapi.Update) updateType {
+	switch {
+	case update.Message.ID != 0:
+		if len(update.Message.Entity) > 0 && update.Message.Entity[0].Type == "bot_command" {
+			return updateCommand
+		}
+		return updateMessage
+
+	case update.EditedMessage.ID != 0:
+		return updateEditedMessage
+
+	case update.CallbackQuery.ID != "":
+		return updateCallbackQuery
+	}
+
+	return updateUnknown
 }
