@@ -19,10 +19,10 @@ import (
 const (
 	// Мин. количество голосов по-умолчанию, которое должно быть у фильма, чтобы
 	// для него закачался постер.
-	minVoteCountDefault = 100
+	minVoteCountDefault = 50
 	// Мин. количество голосов, которое должно быть у фильма на русском,
 	// чтобы для него закачался постер.
-	minVoteCountRu     = 10
+	minVoteCountRu     = 8
 	crawlersNum        = 3
 	movieFetchMaxFails = 3
 	tmdbMaxRetries     = 3
