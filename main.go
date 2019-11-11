@@ -17,6 +17,11 @@ func main() {
 		journal.Fatal(err)
 	}
 
+	err = initDB(cfg.DBName)
+	if err != nil {
+		journal.Fatal(err)
+	}
+
 	cancelCtx, cancel := context.WithCancel(context.Background())
 	wg := sync.WaitGroup{}
 	// Горутина для пополнения БД фильмами по The MovieDB API (api.themoviedb.org).
@@ -30,11 +35,9 @@ func main() {
 	// Выходим при получении какого-либо сигнала закрытия программы.
 	quitSignal := make(chan os.Signal)
 	signal.Notify(quitSignal, syscall.SIGINT, syscall.SIGTERM)
-	select {
-	case <-quitSignal:
-		cancel()
-		wg.Wait()
-		journal.Info("application finished")
-		journal.Stop()
-	}
+	<-quitSignal
+	cancel()
+	wg.Wait()
+	journal.Info("application finished")
+	journal.Stop()
 }

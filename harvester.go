@@ -76,80 +76,6 @@ type movieBrief struct {
 	TMDBID int `json:"id"` // Идентификатор фильма в The MovieDB API.
 }
 
-// Инициализация БД фильмов.
-// TODO: перенести в main.
-func initDB(goID, dbName string) {
-	journal.Info(goID, " initialising database "+dbName)
-
-	con, err := sqlite.NewConn(dbName)
-	if err != nil {
-		journal.Fatal(err)
-	}
-	defer con.Close()
-	journal.Trace(goID, " connected to "+dbName)
-
-	//- Основная таблица с информацией о фильме.
-	query := `
-CREATE TABLE IF NOT EXISTS movie (
-    id             INTEGER PRIMARY KEY,
-    tmdb_id        INTEGER NOT NULL UNIQUE,
-    original_title TEXT    NOT NULL,
-    original_lang  TEXT    NOT NULL,
-    released_on    TEXT    NOT NULL,
-    adult          INTEGER NOT NULL,
-    imdb_id        INTEGER,
-    vote_count     INTEGER,
-    vote_average   REAL,
-    collection_id  INTEGER, -- Если равен 0, то фильм не принадлежит никакой коллекции.
-    created_on     TEXT DEFAULT (datetime('now')),
-    updated_on     TEXT
-);
-`
-	_, err = con.Exec(query)
-	if err != nil {
-		journal.Fatal(goID, " ", err)
-	}
-	journal.Trace(goID, " table movie create OK")
-
-	//- Таблица с дополнительной информацией о фильме из таблицы movie.
-	query = `
-CREATE TABLE IF NOT EXISTS movie_detail (
-    id          INTEGER PRIMARY KEY,
-    fk_movie_id REFERENCES movie(id) NOT NULL,
-    lang        TEXT NOT NULL,
-    title       TEXT NOT NULL,
-    poster      BLOB,
-    created_on  TEXT DEFAULT (datetime('now')),
-    updated_on  TEXT,
-                UNIQUE (fk_movie_id, lang)
-);
-`
-	_, err = con.Exec(query)
-	if err != nil {
-		journal.Fatal(goID, " ", err)
-	}
-	journal.Trace(goID, " table movie_detail create OK")
-
-	//- Таблица для хранения результата получения информации о фильме.
-	query = `
-CREATE TABLE IF NOT EXISTS movie_fetch (
-    id         INTEGER PRIMARY KEY,
-    tmdb_id    INTEGER NOT NULL UNIQUE,
-    complete   INTEGER DEFAULT 0, -- Если равен 1, то вся информация о фильме получена.
-    fail       INTEGER DEFAULT 0, -- Количество неудачных попыток получения информации о фильме.
-    created_on TEXT DEFAULT (datetime('now')),
-    updated_on TEXT
-);
-`
-	_, err = con.Exec(query)
-	if err != nil {
-		journal.Fatal(goID, " ", err)
-	}
-	journal.Trace(goID, " table movie_fetch create OK")
-
-	journal.Info(goID, " database "+dbName+" init OK")
-}
-
 // theMovieDBHarvester заполняет локальную базу фильмов через The MovieDB API.
 func theMovieDBHarvester(ctx context.Context, finished *sync.WaitGroup, key, dbName string) {
 	journal.Replace(key, "<themoviedbapi_key>")
@@ -160,8 +86,6 @@ func theMovieDBHarvester(ctx context.Context, finished *sync.WaitGroup, key, dbN
 		finished.Done()
 		journal.Info(goID, " finished")
 	}()
-
-	initDB(goID, dbName)
 
 	httpClient := &http.Client{
 		Timeout: httpReqTimeout,
