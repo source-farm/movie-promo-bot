@@ -317,14 +317,16 @@ func bot(ctx context.Context, finished *sync.WaitGroup, cfg botConfig, dbName st
 
 	// Горутина для периодического вычитывания новых фильмов из БД.
 	go func() {
-		journal.Info(goID, " loading movie titles from database")
-		err = titles.loadNew()
-		if err == nil {
-			journal.Info(goID, " movie titles loading finished ok")
-		} else {
-			journal.Error(err)
+		for {
+			journal.Info(goID, " loading movie titles from database")
+			err = titles.loadNew()
+			if err == nil {
+				journal.Info(goID, " movie titles loading finished ok")
+			} else {
+				journal.Error(err)
+			}
+			time.Sleep(time.Hour * 24)
 		}
-		time.Sleep(time.Hour * 24)
 	}()
 
 	// Установка Webhook'а.
