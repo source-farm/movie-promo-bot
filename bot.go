@@ -236,7 +236,7 @@ SELECT poster
    SELECT movie_detail.id, movie_detail.title, movie.released_on, movie.collection_id
      FROM movie_detail
 LEFT JOIN movie ON movie_detail.fk_movie_id = movie.id
-    WHERE movie_detail.id > ?1
+    WHERE movie_detail.id > ?1 and movie.adult = 0
  ORDER BY movie_detail.id;
 `
 
