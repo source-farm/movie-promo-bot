@@ -250,10 +250,12 @@ LEFT JOIN movie ON movie_detail.fk_movie_id = movie.id
 	maxResultsInResponse = 3
 
 	// Сообщения, которые отправляются при получении команды /start или /help.
-	greetingMessageRu = `Отправьте мне название фильма и я покажу его постер.`
-	greetingMessageEn = `Please send me a movie title and you will get its poster.`
-	helpMessageRu     = `Отправьте мне название фильма, например "Фильм, фильм, фильм", чтобы увидеть его постер.`
-	helpMessageEn     = `Please send me a movie title like "Frozen" to get its poster.`
+	greetingMessageEn       = `Please send me a movie title and you will get its poster.`
+	greetingMessageRu       = `Отправьте мне название фильма и я покажу его постер.`
+	helpMessageEn           = `Please send me a movie title like "Frozen" to get its poster.`
+	helpMessageRu           = `Отправьте мне название фильма, например "Фильм, фильм, фильм", чтобы увидеть его постер.`
+	incorrectMessageReplyEn = `Please send a text message.`
+	incorrectMessageReplyRu = `Отправьте, пожалуйста, текстовое сообщение.`
 )
 
 var (
@@ -268,11 +270,11 @@ type updateType = int
 
 // Виды сообщений от Telegram, которые умеет обрабатывать бот.
 const (
-	updateCommand       updateType = iota // Команда.
-	updateMessage                         // Обычное сообщение.
-	updateEditedMessage                   // Редактированное сообщение.
-	updateCallbackQuery                   // Нажатие кнопки ранее отправленной inline клавиатуры.
-	updateUnknown                         // Неизвестный вид сообщения.
+	updateCommand           updateType = iota // Команда.
+	updateTextMessage                         // Обычное текстовое сообщение.
+	updateEditedTextMessage                   // Редактированное текстовое сообщение.
+	updateCallbackQuery                       // Нажатие кнопки ранее отправленной inline клавиатуры.
+	updateUnknown                             // Неизвестный вид сообщения.
 )
 
 // bot настраивает общение по Telegram Bot API с пользователями Telegram.
@@ -409,22 +411,22 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 	switch getUpdateType(&update) {
 	// Получена команда.
 	case updateCommand:
-		message := ""
+		reply := ""
 		// Выбираем сообщение, которое нужно отправить в зависимости от команды и языка.
 		if strings.HasPrefix(update.Message.Text, "/start") {
-			message = greetingMessageEn
+			reply = greetingMessageEn
 			if update.Message.From.LangCode == iso6391.Ru {
-				message = greetingMessageRu
+				reply = greetingMessageRu
 			}
 		} else if strings.HasPrefix(update.Message.Text, "/help") {
-			message = helpMessageEn
+			reply = helpMessageEn
 			if update.Message.From.LangCode == iso6391.Ru {
-				message = helpMessageRu
+				reply = helpMessageRu
 			}
 		}
 
-		if message != "" {
-			err := tlgrmClient.SendMessage(update.Message.Chat.ID, message)
+		if reply != "" {
+			err := tlgrmClient.SendMessage(update.Message.Chat.ID, reply)
 			if err != nil {
 				journal.Error(err)
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -432,12 +434,13 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 
-	// Пришло новое сообщение.
-	case updateMessage:
+	// Пришло новое текстовое сообщение.
+	case updateTextMessage:
 		fallthrough
 
-	// Получено редактированное сообщение какого-то ранее отправленного пользователем сообщения.
-	case updateEditedMessage:
+	// Получено отредактированное версия какого-то ранее отправленного
+	// пользователем текстового сообщения.
+	case updateEditedTextMessage:
 		var message telegrambotapi.Message
 		var replyToMessageID int
 		if update.Message.ID != 0 {
@@ -480,6 +483,18 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 		err = tlgrmClient.AnswerCallbackQuery(update.CallbackQuery.ID)
 		if err != nil {
 			journal.Error(err)
+			return
+		}
+
+	case updateUnknown:
+		reply := incorrectMessageReplyEn
+		if update.Message.From.LangCode == iso6391.Ru {
+			reply = incorrectMessageReplyRu
+		}
+		err := tlgrmClient.SendMessage(update.Message.Chat.ID, reply)
+		if err != nil {
+			journal.Error(err)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 	}
@@ -736,10 +751,14 @@ func getUpdateType(update *telegrambotapi.Update) updateType {
 		if len(update.Message.Entity) > 0 && update.Message.Entity[0].Type == "bot_command" {
 			return updateCommand
 		}
-		return updateMessage
+		if update.Message.Text != "" {
+			return updateTextMessage
+		}
 
 	case update.EditedMessage.ID != 0:
-		return updateEditedMessage
+		if update.EditedMessage.Text != "" {
+			return updateEditedTextMessage
+		}
 
 	case update.CallbackQuery.ID != "":
 		return updateCallbackQuery
