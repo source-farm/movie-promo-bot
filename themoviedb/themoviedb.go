@@ -71,7 +71,8 @@ var (
 	// Клиент не настроен.
 	ErrConfigure = errors.New("themoviedb: client is not configured (call Configure method)")
 
-	// Запрос несуществующей страницы по пути "/movie/now_playing".
+	// Запрос несуществующей страницы при выполнении запросов, которые
+	// возвращают результаты постранично. Например, метод GetNowPlaying структуры Client.
 	ErrPage = errors.New("themoviedb: page not found")
 )
 
@@ -408,6 +409,59 @@ func (c *Client) GetNowPlaying(page int) ([]Movie, error) {
 	}
 
 	return movies, nil
+}
+
+// GetChangedMovies возвращает идентификаторы фильмов (TMDBID), которые были
+// изменены за последние 24 часа.
+// Фильмы разбиты по страницам, начиная с 1. Если страниц не осталось, то
+// возвращается ошибка ErrPage.
+func (c *Client) GetChangedMovies(page int) ([]int, error) {
+	// Формируем URL вида
+	//
+	// http://api.themoviedb.org/3/movie/changes?api_key=<key>&page=<pageNum>
+	//
+	url, err := url.Parse(c.apiBaseURL + "/movie/changes")
+	if err != nil {
+		return nil, err
+	}
+	query := url.Query()
+	query.Add("api_key", c.key)
+	query.Add("page", strconv.Itoa(page))
+	url.RawQuery = query.Encode()
+
+	err = c.checkRateLimit()
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := c.httpClient.Get(url.String())
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New("themoviedb: " + resp.Status)
+	}
+
+	changedMovies := []Movie{}
+	scanner := jsonstream.NewScanner()
+	scanner.SearchFor(&changedMovies, "results")
+	totalPages := 0
+	scanner.SearchFor(&totalPages, "total_pages")
+	err = scanner.Find(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if page > totalPages {
+		return nil, ErrPage
+	}
+
+	changedMovieIDs := make([]int, len(changedMovies))
+	for i := range changedMovies {
+		changedMovieIDs[i] = changedMovies[i].TMDBID
+	}
+
+	return changedMovieIDs, nil
 }
 
 // GetPoster закачивает постер через путь к нему.
