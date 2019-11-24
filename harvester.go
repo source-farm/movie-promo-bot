@@ -123,12 +123,17 @@ func theMovieDBHarvester(ctx context.Context, finished *sync.WaitGroup, key, dbN
 		wg.Wait()
 		journal.Info(goID, " movies fetch finished")
 
-		// После завершения сессии получения фильмов ждём 1 день перед следующей сессией.
-		journal.Info(goID, " sleeping for 1 day")
-		timer := time.NewTimer(time.Hour * 24)
+		// После завершения сессии получения фильмов ждём начала следующего дня
+		// по UTC перед следующей сессией.
+		nextDay := time.Now().AddDate(0, 0, 1)
+		nextDay = time.Date(nextDay.Year(), nextDay.Month(), nextDay.Day(), 0, 0, 0, 0, time.UTC)
+		sleepDuration := time.Until(nextDay)
+		journal.Info(goID, "sleeping for ", sleepDuration, " (before ", nextDay, ")")
+		timer := time.NewTimer(sleepDuration)
 		select {
 		case <-timer.C:
 		case <-ctx.Done():
+			timer.Stop()
 			journal.Info(goID, " sleeping cancelled")
 			return
 		}

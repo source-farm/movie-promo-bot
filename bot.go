@@ -327,7 +327,11 @@ func bot(ctx context.Context, finished *sync.WaitGroup, cfg botConfig, dbName st
 			} else {
 				journal.Error(err)
 			}
-			time.Sleep(time.Hour * 24)
+			// Спим до часа ночи по UTC следующего дня.
+			nextDay := time.Now().AddDate(0, 0, 1)
+			wakeupTime := time.Date(nextDay.Year(), nextDay.Month(), nextDay.Day(), 1, 0, 0, 0, time.UTC)
+			sleepDuration := time.Until(wakeupTime)
+			time.Sleep(sleepDuration)
 		}
 	}()
 
