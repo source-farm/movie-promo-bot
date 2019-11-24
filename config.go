@@ -99,23 +99,6 @@ CREATE TABLE IF NOT EXISTS movie_detail (
 	}
 	journal.Trace("table movie_detail create OK")
 
-	//- Таблица для хранения результата получения информации о фильме.
-	query = `
-CREATE TABLE IF NOT EXISTS movie_fetch (
-    id         INTEGER PRIMARY KEY,
-    tmdb_id    INTEGER NOT NULL UNIQUE,
-    complete   INTEGER DEFAULT 0, -- Если равен 1, то вся информация о фильме получена.
-    fail       INTEGER DEFAULT 0, -- Количество неудачных попыток получения информации о фильме.
-    created_on TEXT DEFAULT (datetime('now')),
-    updated_on TEXT
-);
-`
-	_, err = con.Exec(query)
-	if err != nil {
-		return err
-	}
-	journal.Trace("table movie_fetch create OK")
-
 	journal.Info("database " + dbName + " init OK")
 
 	return nil

@@ -32,6 +32,10 @@ const (
 	// Максимальный номер страницы, которую можно запросить по пути
 	// /movie/now_playing при обращении к The MovieDB API.
 	NowPlayingMaxPage = 500
+
+	// Максимальный номер страницы, которую можно запросить по пути
+	// /movie/changes при обращении к The MovieDB API.
+	ChangedMoviesMaxPage = 1000
 )
 
 // Переменные для контроля лимита запросов. Т.к. The MovieDB API устанавливает
