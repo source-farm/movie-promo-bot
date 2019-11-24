@@ -416,13 +416,13 @@ func (c *Client) GetNowPlaying(page int) ([]Movie, error) {
 }
 
 // GetChangedMovies возвращает идентификаторы фильмов (TMDBID), которые были
-// изменены за последние 24 часа.
+// изменены за предыдущий день.
 // Фильмы разбиты по страницам, начиная с 1. Если страниц не осталось, то
 // возвращается ошибка ErrPage.
 func (c *Client) GetChangedMovies(page int) ([]int, error) {
 	// Формируем URL вида
 	//
-	// http://api.themoviedb.org/3/movie/changes?api_key=<key>&page=<pageNum>
+	// http://api.themoviedb.org/3/movie/changes?api_key=<key>&end_date=<end_date>&start_date=<start_date>&page=<pageNum>
 	//
 	url, err := url.Parse(c.apiBaseURL + "/movie/changes")
 	if err != nil {
@@ -431,6 +431,10 @@ func (c *Client) GetChangedMovies(page int) ([]int, error) {
 	query := url.Query()
 	query.Add("api_key", c.key)
 	query.Add("page", strconv.Itoa(page))
+	now := time.Now()
+	query.Add("end_date", now.Format("2006-01-02"))
+	prevDay := now.AddDate(0, 0, -1)
+	query.Add("start_date", prevDay.Format("2006-01-02"))
 	url.RawQuery = query.Encode()
 
 	err = c.checkRateLimit()
