@@ -531,7 +531,7 @@ mainLoop:
 		// Если мы дошли до этого места, то значит все данные готовы к добавлению в БД.
 		err = conn.Commit()
 		if err != nil {
-			journal.Error(goID, " ", err)
+			goto DBError
 		} else {
 			journal.Info(goID, " adding movie [", tmdbID, "] data to database OK")
 		}
