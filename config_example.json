@@ -1,0 +1,12 @@
+{
+    "themoviedb_key": "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "db_name": "database.db",
+    "bot_config": {
+        "telegram_token": "XXXXXXXXX:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        "webhook_address": "1.2.3.4",
+        "webhook_port": 8443,
+        "telegram_bot_api_address": "api.telegram.org",
+        "public_cert": "public.pem",
+        "private_key": "private.key"
+    }
+}
