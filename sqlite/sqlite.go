@@ -6,12 +6,6 @@ package sqlite
 /*
 #include <stdlib.h>
 #include "sqlite3.h"
-
-// Тип void_func определяется лишь для того, чтобы преобразовать к нему функцию
-// sqlite3_spellfix_init перед её передачей в sqlite3_auto_extension.
-// См. определение функции NewConn, а также
-// https://golang.org/cmd/cgo/#hdr-Go_references_to_C
-typedef void (*void_func) ();
 */
 import "C"
 import (
@@ -30,8 +24,7 @@ var (
 	ErrColumnType     = errors.New("sqlite: unsupported column type")
 )
 
-// Rows используется для итерации по результату запроса. Rows не является
-// потоко-безопасным.
+// Rows используется для итерации по результату запроса.
 type Rows struct {
 	stmt *Stmt
 	done bool
@@ -143,8 +136,7 @@ func (r *Rows) Close() error {
 	return resultCode2GoError(resCode)
 }
 
-// Row используется для получения первой строки запроса. Row не является
-// потоко-безопасным.
+// Row используется для получения первой строки запроса.
 type Row struct {
 	rows *Rows
 	err  error
@@ -196,8 +188,7 @@ func (r *sqliteResult) RowsAffected() (int64, error) {
 	return int64(affected), nil
 }
 
-// Stmt - это скомпилированное SQL-предложение (SQL statement). Stmt не
-// является потоко-безопасным.
+// Stmt - это скомпилированное SQL-предложение (SQL statement).
 type Stmt struct {
 	conn *Conn
 	stmt *C.struct_sqlite3_stmt
@@ -359,7 +350,7 @@ func (s *Stmt) Close() error {
 	return nil
 }
 
-// Conn - это одно соединение с БД. Conn не является потоко-безопасным.
+// Conn - это одно соединение с БД.
 type Conn struct {
 	db *C.struct_sqlite3
 }
