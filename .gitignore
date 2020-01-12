@@ -1,9 +1,8 @@
 .directory
-*.db
-*.a
 *.key
 *.pem
-bot
+*.db
+movie-promo-bot
 config.json
 themoviedb/key.txt
 telegrambotapi/test_config.json
