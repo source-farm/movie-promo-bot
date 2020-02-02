@@ -9,7 +9,7 @@ popd 1>/dev/null
 echo "SQLite library build finished"
 
 echo "building movie-promo-bot"
-go build movie-promo-bot
+go build -o movie-promo-bot .
 echo "movie-promo-bot build finished"
 
 rm $SQLITE_LOCATION/libsqlite3.a
