@@ -2,8 +2,6 @@
 package themoviedb
 
 import (
-	"bot/iso6391"
-	"bot/jsonstream"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -18,6 +16,9 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/source-farm/movie-promo-bot/iso6391"
+	"github.com/source-farm/movie-promo-bot/jsonstream"
 )
 
 const (

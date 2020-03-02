@@ -1,11 +1,12 @@
 package main
 
 import (
-	"bot/journal"
-	"bot/sqlite"
 	"encoding/json"
 	"io/ioutil"
 	"os"
+
+	"github.com/source-farm/movie-promo-bot/journal"
+	"github.com/source-farm/movie-promo-bot/sqlite"
 )
 
 type botConfig struct {

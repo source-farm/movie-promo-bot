@@ -1,11 +1,6 @@
 package main
 
 import (
-	"bot/iso6391"
-	"bot/journal"
-	"bot/levenshtein"
-	"bot/sqlite"
-	"bot/telegrambotapi"
 	"bytes"
 	"container/heap"
 	"context"
@@ -21,6 +16,12 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/source-farm/movie-promo-bot/iso6391"
+	"github.com/source-farm/movie-promo-bot/journal"
+	"github.com/source-farm/movie-promo-bot/levenshtein"
+	"github.com/source-farm/movie-promo-bot/sqlite"
+	"github.com/source-farm/movie-promo-bot/telegrambotapi"
 )
 
 // Краткая информация о фильме.

@@ -1,12 +1,13 @@
 package main
 
 import (
-	"bot/journal"
 	"context"
 	"os"
 	"os/signal"
 	"sync"
 	"syscall"
+
+	"github.com/source-farm/movie-promo-bot/journal"
 )
 
 func main() {

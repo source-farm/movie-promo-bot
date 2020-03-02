@@ -1,10 +1,6 @@
 package main
 
 import (
-	"bot/iso6391"
-	"bot/journal"
-	"bot/sqlite"
-	"bot/themoviedb"
 	"bufio"
 	"compress/gzip"
 	"context"
@@ -14,6 +10,11 @@ import (
 	"strconv"
 	"sync"
 	"time"
+
+	"github.com/source-farm/movie-promo-bot/iso6391"
+	"github.com/source-farm/movie-promo-bot/journal"
+	"github.com/source-farm/movie-promo-bot/sqlite"
+	"github.com/source-farm/movie-promo-bot/themoviedb"
 )
 
 const (
