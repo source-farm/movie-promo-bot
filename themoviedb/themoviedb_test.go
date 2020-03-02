@@ -1,7 +1,6 @@
 package themoviedb
 
 import (
-	"bot/iso6391"
 	"bytes"
 	"errors"
 	"image/jpeg"
@@ -11,6 +10,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/source-farm/movie-promo-bot/iso6391"
 )
 
 const (
