@@ -34,7 +34,7 @@ func main() {
 	go bot(cancelCtx, &wg, cfg.Bot, cfg.DBName)
 
 	// Выходим при получении какого-либо сигнала закрытия программы.
-	quitSignal := make(chan os.Signal)
+	quitSignal := make(chan os.Signal, 1)
 	signal.Notify(quitSignal, syscall.SIGINT, syscall.SIGTERM)
 	<-quitSignal
 	cancel()

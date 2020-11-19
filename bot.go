@@ -30,7 +30,7 @@ type titleInfo struct {
 	titleOriginal string    // Название фильма.
 	titleLower    string    // Название фильма в нижнем регистре.
 	releaseDate   time.Time // Время выхода фильма в кинотеатрах.
-	collectionID  int64     // Разные части одного фильма принадлежат одной колеекции.
+	collectionID  int64     // Разные части одного фильма принадлежат одной коллекции.
 	editcost      int       // Стоимость приведения по алгоритму Левенштейна какого-либо фильма к titleOriginal. Чем меньше, тем лучше.
 }
 
