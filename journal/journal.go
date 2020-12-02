@@ -85,7 +85,7 @@ var (
 	clMu     sync.RWMutex
 
 	// Правила замены для логируемых сообщений.
-	replaceRule map[string]string = map[string]string{}
+	replaceRule = map[string]string{}
 	rrMu        sync.Mutex
 
 	// Сообщения направляются на стандартный вывод, т.к. сохранением логов

@@ -23,7 +23,8 @@ const (
 func TestDailyExport(t *testing.T) {
 	filename := "daily_export.json.gz"
 	client := NewClient("", nil)
-	err := client.GetDailyExport(2019, 8, 1, filename)
+	now := time.Now().AddDate(0, 0, -1)
+	err := client.GetDailyExport(now.Year(), int(now.Month()), now.Day(), filename)
 	if err != nil {
 		t.Fatal(err)
 	}

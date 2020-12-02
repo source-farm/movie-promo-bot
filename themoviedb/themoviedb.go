@@ -400,7 +400,7 @@ func (c *Client) GetNowPlaying(page int) ([]Movie, error) {
 		return nil, errors.New("themoviedb: " + resp.Status)
 	}
 
-	movies := []Movie{}
+	var movies []Movie
 	scanner := jsonstream.NewScanner()
 	scanner.SearchFor(&movies, "results")
 	totalPages := 0
@@ -452,7 +452,7 @@ func (c *Client) GetChangedMovies(page int) ([]int, error) {
 		return nil, errors.New("themoviedb: " + resp.Status)
 	}
 
-	changedMovies := []Movie{}
+	var changedMovies []Movie
 	scanner := jsonstream.NewScanner()
 	scanner.SearchFor(&changedMovies, "results")
 	totalPages := 0

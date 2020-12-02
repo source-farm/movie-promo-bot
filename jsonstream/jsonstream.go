@@ -163,7 +163,7 @@ func (s *Scanner) Find(stream io.Reader) error {
 		return dec.Decode(value.ptr)
 	}
 
-	stack := []jsonElement{}
+	var stack []jsonElement
 	var path jsonPath
 	for {
 		// TODO: остановить декодирование, если все пути найдены.

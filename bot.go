@@ -263,7 +263,7 @@ var (
 	posterStmt *sqlite.Stmt
 	mu         sync.Mutex
 
-	titles      Titles = Titles{storage: map[int64]titleInfo{}}
+	titles      = Titles{storage: map[int64]titleInfo{}}
 	tlgrmClient *telegrambotapi.Client
 )
 
@@ -515,7 +515,7 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 func makeSendPhoto(userInput string, chatID int64, replyToMessageID int) ([]byte, string, error) {
 	bestMatchTitles := titles.bestMatches(userInput)
 	if len(bestMatchTitles) == 0 {
-		return nil, "", errors.New("No match in movies database")
+		return nil, "", errors.New("no match in movies database")
 	}
 
 	var poster []byte
@@ -523,7 +523,7 @@ func makeSendPhoto(userInput string, chatID int64, replyToMessageID int) ([]byte
 	err := posterStmt.QueryRow(bestMatchTitles[0].id).Scan(&poster)
 	mu.Unlock()
 	if err != nil {
-		return nil, "", errors.New("Cannot fetch poster from database")
+		return nil, "", errors.New("cannot fetch poster from database")
 	}
 
 	var buf bytes.Buffer
@@ -590,7 +590,7 @@ func makeSendPhoto(userInput string, chatID int64, replyToMessageID int) ([]byte
 		return nil, "", err
 	}
 	keyboard := telegrambotapi.InlineKeyboardMarkup{InlineKeyboard: [][]telegrambotapi.InlineKeyboardButton{}}
-	buttons := []telegrambotapi.InlineKeyboardButton{}
+	var buttons []telegrambotapi.InlineKeyboardButton
 	for i := range bestMatchTitles {
 		buttonText := strconv.Itoa(i + 1)
 		if i == 0 {
@@ -702,7 +702,7 @@ func makeEditMessageMedia(callbackQuery *telegrambotapi.CallbackQuery) ([]byte, 
 	err = posterStmt.QueryRow(movieID).Scan(&poster)
 	mu.Unlock()
 	if err != nil {
-		return nil, "", errors.New("Cannot fetch poster from database")
+		return nil, "", errors.New("cannot fetch poster from database")
 	}
 	// Параметр photo.
 	fw, err = mw.CreateFormFile(photoFieldName, "image") // Вместо "image" может быть любое другое название.
@@ -717,13 +717,13 @@ func makeEditMessageMedia(callbackQuery *telegrambotapi.CallbackQuery) ([]byte, 
 	// кнопка выделяется по обеим сторонам знаком "-".
 	oldKeyboard := callbackQuery.Message.ReplyMarkup.InlineKeyboard
 	if len(oldKeyboard) == 0 {
-		return nil, "", errors.New("Empty keyboard")
+		return nil, "", errors.New("empty keyboard")
 	}
 	fw, err = mw.CreateFormField("reply_markup")
 	if err != nil {
 		return nil, "", err
 	}
-	newButtons := []telegrambotapi.InlineKeyboardButton{}
+	var newButtons []telegrambotapi.InlineKeyboardButton
 	for i, button := range oldKeyboard[0] { // У нас клавиатура состоит только из одного ряда кнопок.
 		buttonText := strconv.Itoa(i + 1)
 		if button.CallbackData == callbackQuery.Data {
