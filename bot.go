@@ -469,6 +469,15 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 
 	// Пользователь нажал на кнопку ранее отправленного сообщения с inline клавиатурой.
 	case updateCallbackQuery:
+		// При нажатии какой-либо кнопки inline клавиатуры необходимо вызывать
+		// метод AnswerCallbackQuery Telegram Bot API, чтобы исчез белый круг
+		// прогресса на кнопке.
+		err = tlgrmClient.AnswerCallbackQuery(update.CallbackQuery.ID)
+		if err != nil {
+			journal.Error(err)
+			return
+		}
+
 		editMessageMedia, contentType, err := makeEditMessageMedia(&update.CallbackQuery)
 		if err != nil {
 			journal.Error(err)
@@ -477,15 +486,6 @@ func telegramHandler(w http.ResponseWriter, req *http.Request) {
 		}
 		w.Header().Set("Content-Type", contentType)
 		_, err = w.Write(editMessageMedia)
-		if err != nil {
-			journal.Error(err)
-			return
-		}
-
-		// При нажатии какой-либо кнопки inline клавиатуры необходимо вызывать
-		// метод AnswerCallbackQuery Telegram Bot API, чтобы исчез белый круг
-		// прогресса на кнопке.
-		err = tlgrmClient.AnswerCallbackQuery(update.CallbackQuery.ID)
 		if err != nil {
 			journal.Error(err)
 			return

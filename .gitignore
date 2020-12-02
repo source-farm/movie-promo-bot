@@ -1,4 +1,5 @@
 .directory
+.idea
 *.key
 *.pem
 *.db
